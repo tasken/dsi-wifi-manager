@@ -1,0 +1,32 @@
+# Flash and BIOS dumps. Never commit these.
+#
+# dsfirmware.bin holds the WiFi passphrase in PLAINTEXT (slot 4-6 offset 0x120), the console's
+# MAC address at 0x36, the Nintendo WFC user ID at 0xF0, and the owner's nickname/birthday in
+# the user settings block. The BIOS dumps are copyrighted Nintendo code.
+dsidump/
+*.bin
+*.sav
+
+# Backup files the app produces contain the same passphrases.
+DSIWIFI/
+*.dswifi
+
+__pycache__/
+*.pyc
+*.pyo
+
+# Build output. *.bin above already covers the fixtures that land in build/.
+build/
+build.log
+*.nds
+*.dsi
+*.elf
+*.map
+*.o
+*.a
+*.d
+
+# Icon and logo drafts. Deliberately out of the repo for now -- 60-odd variants of
+# the same image, and nothing in the build references them yet. Drop this line once
+# one is chosen and wired into GAME_ICON.
+resources/

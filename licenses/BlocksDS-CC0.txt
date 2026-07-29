@@ -1,0 +1,14 @@
+BlocksDS
+https://github.com/blocksds/sdk
+
+Makefile, Makefile.arm7 and Makefile.arm9 derive from the BlocksDS project
+templates. They keep the header the templates carry:
+
+    # SPDX-License-Identifier: CC0-1.0
+    #
+    # SPDX-FileContributor: Antonio Niño Díaz, 2023
+
+CC0-1.0 is a public-domain dedication and imposes no conditions, so nothing
+here is required. The credit is kept because it is the honest thing to do.
+
+Full text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
