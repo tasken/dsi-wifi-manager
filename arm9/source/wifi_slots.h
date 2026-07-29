@@ -1,6 +1,4 @@
-// SPDX-License-Identifier: CC0-1.0
-//
-// Decoder for the six DSi WiFi access-point records.
+// Decoder for the six DSi Wi-Fi access-point records.
 //
 // Deliberately free of libnds: the ARM9 build compiles this file, and so does
 // tools/host_slotlist.c under plain gcc, so the on-console decode can be diffed

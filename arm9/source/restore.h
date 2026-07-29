@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // Everything that must be true before the app writes a byte to flash, and the write
 // itself expressed as an operation on a buffer so it can be tested without a console.
 //

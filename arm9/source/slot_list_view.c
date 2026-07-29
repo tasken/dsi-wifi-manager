@@ -1,10 +1,9 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // See slot_list_view.h.
 
 #include <stdio.h>
 #include <string.h>
 
+#include "fb_render.h"
 #include "slot_list_view.h"
 
 // Lines are composed in a buffer with room to spare and cut to VIEW_COLS on the way
@@ -14,7 +13,9 @@
 
 typedef char view_line_t[VIEW_SCRATCH];
 
-// "> 1 NTR " is 8 columns, then the quotes and the non-ASCII marker.
+// The list row spends "> N  " on its marker and number, and may add a note when the name
+// is not printable. SSID_ROOM is what is left for the name itself: 40 at 51 columns, so a
+// full 32-byte one fits whole.
 #define SSID_ROOM (VIEW_COLS - 8 - 3)
 
 // The banner's version, supplied by the build from git (see the root Makefile). Hand
@@ -102,11 +103,6 @@ static view_attr_t crc_attr(const wifi_slot_t *s)
     return ok ? VIEW_GOOD : VIEW_BAD;
 }
 
-static const char *family_name(wifi_family_t f)
-{
-    return (f == WIFI_FAMILY_TWL) ? "TWL" : "NTR";
-}
-
 // "crc ok", "crc BAD", or for a TWL record both checksums: "crc ok/BAD".
 static void crc_text(const wifi_slot_t *s, char *buf, size_t len)
 {
@@ -147,7 +143,7 @@ static void ssid_text(const wifi_slot_t *s, int room, char *buf, size_t len)
 
 // --- the top pane ------------------------------------------------------------------
 
-#define VIEW_APP_NAME "DSi WiFi Slots"
+#define VIEW_APP_NAME "Wi-Fi Connections"
 
 static void top_banner(void)
 {
@@ -178,7 +174,7 @@ static void top_layout(const wifi_layout_t *layout)
              layout->is_dsi ? "DSi" : "DS");
     top(line);
 
-    snprintf(line, sizeof(line), "wifi 0x%05lX-0x%05lX  %u slots",
+    snprintf(line, sizeof(line), "wifi 0x%05lX-0x%05lX  %u connections",
              (unsigned long)layout->region_start, (unsigned long)(layout->base - 1),
              layout->count);
     top(line);
@@ -256,7 +252,7 @@ static void detail_row(const char *left, const char *right)
         snprintf(line, sizeof(line), "%-*.*s%.*s",
                  DETAIL_COL2, DETAIL_CELL - 1, left, DETAIL_CELL - 1, right);
 
-    top(line);
+    put(line);
 }
 
 // A dotted quad, or what its being zero means. Which question to ask is the caller's,
@@ -270,118 +266,134 @@ static void addr_text(const uint8_t a[4], const char *if_zero, char *buf, size_t
         snprintf(buf, len, "%u.%u.%u.%u", a[0], a[1], a[2], a[3]);
 }
 
-void view_detail(const wifi_layout_t *layout, const wifi_slot_t *s)
+
+
+// Plain words for what the record is, not what byte says so. The security byte is spelled
+// out on the connection screen; here the user wants to know whether it has a password.
+static const char *security_words(const wifi_slot_t *s)
+{
+    const char *label = wifi_security_label(s);
+
+    if (strcmp(label, "open") == 0 || strcmp(label, "none") == 0)
+        return "Open network, no password";
+
+    // An unverified label keeps its '?' even in plain language. Values 0x04-0x06 of the DSi
+    // security byte are still inferred from the order of options in a menu, and docs/HARDWARE.md
+    // forbids letting a label like that pass as settled. The connection screen has the byte.
+    return (strchr(label, '?') != NULL) ? "Password protected, type unconfirmed"
+                                        : "Password protected";
+}
+
+// The record's format, named. Three columns, and it claims nothing beyond the name.
+//
+// This replaced "Works on DS and DSi" / "DSi only", which was wrong in three ways: it
+// described console compatibility when the only thing the family decides is where a backup
+// can be restored; it advertised something no software can do, since fwTool's restore is
+// commented out as TODO and this ROM's unitcode refuses to boot on a DS; and at 19 columns it
+// was the longest thing on the row.
+//
+// Adopting NTR/TWL deliberately reverses the note in docs/HARDWARE.md under "Nintendo calls them
+// connections", which said the split should acquire no user-facing vocabulary.
+// That note was about not *inventing* one for a consumer flow. These are Nintendo's own
+// codenames, they are already the names in wifi_slots.h, and this is a tool for someone
+// moving records between connections on purpose. The reversal is recorded in both files
+// rather than left to contradict them silently.
+static const char *family_tag(wifi_family_t f)
+{
+    return (f == WIFI_FAMILY_TWL) ? "TWL" : "NTR";
+}
+
+// What the family means, for the pane that has room for a sentence. Only the WPA half is
+// stated: connections 4-6 also carry a proxy, but no record with a configured proxy has ever
+// been observed on any of the five test inputs, and docs/HARDWARE.md forbids letting an unobserved
+// field pass as settled in user-facing text. The connection screen shows the raw bytes.
+// Where a backup of this connection can go. The in-use counterpart to family_accepts(): that
+// says what can come in, this says where this one can be put.
+//
+// It replaced a capability sentence -- "no room for a WPA password" -- which was unhelpful and
+// misleading at once. Unhelpful because a working connection's inability to hold a kind of
+// password it does not use tells the user nothing. Misleading because an NTR connection *can*
+// carry a WEP key, which anyone would call a password.
+//
+// Numbers rather than NTR/TWL on purpose: the row already carries the tag for whoever wants the
+// format name, and connection numbers are the only vocabulary Nintendo itself uses.
+static const char *family_fits(wifi_family_t f)
+{
+    return (f == WIFI_FAMILY_TWL) ? "A backup of this fits Connections 4-6."
+                                  : "A backup of this fits Connections 1-3.";
+}
+
+// What a free connection will accept. The article changes, so this is a whole phrase rather
+// than the tag with a word glued either side.
+static const char *family_takes(wifi_family_t f)
+{
+    return (f == WIFI_FAMILY_TWL) ? "takes a TWL backup" : "takes an NTR backup";
+}
+
+// What a free connection accepts. Numbers, matching family_fits(), so the pane speaks one
+// vocabulary throughout; the NTR/TWL tag lives on the list row for whoever wants it.
+static const char *family_accepts(wifi_family_t f)
+{
+    return (f == WIFI_FAMILY_TWL) ? "A backup from Connections 4-6 fits here."
+                                  : "A backup from Connections 1-3 fits here.";
+}
+
+// Where the family tag starts on a list row. 5 columns of indent plus this leaves the tag at
+// column 44 and ends it at 47, inside the 51 the pane has.
+//
+// It is 39 rather than the 20 the old family column forced because a three-column tag no
+// longer has to be paid for out of the security phrase. That is the whole reason
+// security_short() is gone: it shortened "Password protected, type unconfirmed" to
+// "Password protected", which silently dropped the one word saying the type is a guess.
+//
+// The longest phrase security_words() returns is 36, so there are always at least three
+// spaces before the tag. Nothing enforces that at compile time -- the phrases are chosen at
+// runtime -- so the widths phase of tools/crosscheck.py is what holds it.
+#define ROW_SEC_W 39
+
+void view_summary(const wifi_layout_t *layout, const wifi_slot_t *s, uint8_t of)
 {
     view_line_t line;
+    (void)layout;
 
     top_banner();
-    top_layout(layout);
     rule(VIEW_TOP);
 
-    // The offset is the one fact that ties a slot on screen to a range in a flash dump,
-    // which is how every hardware finding in this project was checked.
-    snprintf(line, sizeof(line), "Slot %u  %s        0x%05lX  %u bytes",
-             s->number, family_name(s->family),
-             (unsigned long)s->offset, s->length);
-    top(line);
+    snprintf(line, sizeof(line), "Connection %u of %u", s->number, of);
+    top_a(VIEW_DIM, line);
+    top("");
 
     if (s->is_free)
     {
-        // Free slots are not blank -- they carry a valid checksum and non-zero fields.
-        // Saying so here is cheaper than explaining it once someone dumps the flash.
-        snprintf(line, sizeof(line), "Free      E7=%02X, no network", s->status);
-        top_a(VIEW_DIM, line);
+        top_a(VIEW_DIM, "Empty");
+        top("");
+        top_a(VIEW_DIM, "No network is saved here.");
 
-        // The raw byte without its label. wifi_security_label() reads "open" for the 0x00
-        // a free slot happens to carry, and naming a security mode for a slot holding no
-        // network would be inventing a fact the record does not state.
-        snprintf(line, sizeof(line), "Security  [%02X] not meaningful",
-                 wifi_slot_security_byte(s));
-        top(line);
-
-        char crc[16];
-        crc_text(s, crc, sizeof(crc));
-        snprintf(line, sizeof(line), "Checksum  %s", crc);
-        top_a(crc_attr(s), line);
+        // Named, because the unqualified version promised something it could not keep. "A
+        // backup can be restored into it" is false whenever every backup on the card is the
+        // other family, and the app only said so after the user had picked this connection
+        // and walked into view_none_fit.
+        top_a(VIEW_DIM, family_accepts(s->family));
         return;
     }
 
-    // At 51 columns the SSID and its length usually fit one row together, where at 31 the
-    // name alone needed two.
-    //
-    // Compose it and measure, rather than predicting the width from the SSID length. The
-    // prediction here was `ssid_len + DETAIL_LABEL + 12`, and the 12 quietly assumed the
-    // note was empty: a 20-byte SSID with a non-ASCII character in it produced a 60-column
-    // row that got cut at "not all p", losing the one warning that case exists to give.
-    // Measuring cannot drift from the format string, because it is the format string.
-    const char *note = s->ssid_printable ? "" : ", not all printable";
+    // The whole name, wrapped rather than cut. This is the one thing the user came to read.
+    top_wrapped(s->ssid);
+    if (!s->ssid_printable)
+        top_a(VIEW_DIM, "  (some characters could not be shown)");
+    top("");
 
-    snprintf(line, sizeof(line), "%-*s%s  (%u bytes%s)", DETAIL_LABEL, "SSID", s->ssid,
-             s->ssid_len, note);
+    top(security_words(s));
+    top(family_fits(s->family));
+    top("");
 
-    if (strlen(line) <= VIEW_COLS)
-    {
-        top(line);
-    }
+    // The checksum matters to a person only as "is this readable", so it is silent when
+    // fine and loud when not.
+    bool ok = s->crc_ok && (!s->has_crc2 || s->crc2_ok);
+    if (ok)
+        top_a(VIEW_GOOD, "Saved settings look intact.");
     else
-    {
-        top("SSID");
-        top_wrapped(s->ssid);
-        snprintf(line, sizeof(line), "  %u bytes%s", s->ssid_len, note);
-        top(line);
-    }
-    top("");
-
-    // Identity on the left, network on the right. The right column is longer, so the left
-    // one runs out first and the remaining rows carry only a right cell.
-    detail_cell_t l[3];
-    detail_cell_t r[6];
-    char v[32];
-
-    snprintf(v, sizeof(v), "0x%02X in use", s->status);
-    detail_cell(l[0], "Status", v);
-
-    snprintf(v, sizeof(v), "%s  [%02X]", wifi_security_label(s), wifi_slot_security_byte(s));
-    detail_cell(l[1], "Security", v);
-
-    snprintf(v, sizeof(v), "0x%02X", s->config_bits);
-    detail_cell(l[2], "Config", v);
-
-    // "auto (DHCP)" only for the address. A zero DNS is not the same statement -- it means
-    // the console takes whatever the network offers -- and calling both "auto" would read
-    // as one setting when they are two. The reference DSi runs a DHCP address with a
-    // manually set DNS 1, which is the case that proves they are independent.
-    addr_text(s->ip, "auto (DHCP)", v, sizeof(v));
-    detail_cell(r[0], "IP", v);
-
-    addr_text(s->gateway, "auto", v, sizeof(v));
-    detail_cell(r[1], "Gateway", v);
-
-    addr_text(s->dns1, "(unset)", v, sizeof(v));
-    detail_cell(r[2], "DNS 1", v);
-
-    addr_text(s->dns2, "(unset)", v, sizeof(v));
-    detail_cell(r[3], "DNS 2", v);
-
-    // Printed as they read. Subnet 0 and MTU 0 are both what a working connection stores on
-    // the reference console, and MTU 0 is the value System Settings later rewrites to 1400,
-    // so dressing either up as invalid would contradict a hardware finding.
-    snprintf(v, sizeof(v), "/%u", s->subnet_prefix);
-    detail_cell(r[4], "Subnet", v);
-
-    snprintf(v, sizeof(v), "%u", s->mtu);
-    detail_cell(r[5], "MTU", v);
-
-    for (int i = 0; i < 6; i++)
-        detail_row((i < 3) ? l[i] : "", r[i]);
-
-    // Its own row: the sink colours a whole line, so anything sharing this one would be
-    // dragged green or red with it.
-    top("");
-    char crc[16];
-    crc_text(s, crc, sizeof(crc));
-    snprintf(line, sizeof(line), "%-*s%s", DETAIL_LABEL, "Checksum", crc);
-    top_a(crc_attr(s), line);
+        top_a(VIEW_BAD, "These settings look damaged.");
 }
 
 void view_idle_context(const wifi_layout_t *layout)
@@ -391,7 +403,7 @@ void view_idle_context(const wifi_layout_t *layout)
     rule(VIEW_TOP);
 }
 
-// "1 NTR \"name\"" on one row, for the context panes, where the label eats 6 columns.
+// "1  \"name\"" on one row, for the context panes, where the label eats 6 columns.
 #define CTX_LABEL 6
 
 static void top_slot_line(const char *label, const wifi_slot_t *s)
@@ -401,15 +413,13 @@ static void top_slot_line(const char *label, const wifi_slot_t *s)
 
     if (s->is_free)
     {
-        snprintf(line, sizeof(line), "%-*s%u %s (free)", CTX_LABEL, label,
-                 s->number, family_name(s->family));
+        snprintf(line, sizeof(line), "%-*s%u  (empty)", CTX_LABEL, label, s->number);
     }
     else
     {
-        // CTX_LABEL, the slot number, the family and the two quotes.
-        ssid_text(s, VIEW_COLS - CTX_LABEL - 8, ssid, sizeof(ssid));
-        snprintf(line, sizeof(line), "%-*s%u %s \"%s\"", CTX_LABEL, label,
-                 s->number, family_name(s->family), ssid);
+        // CTX_LABEL, the connection number, two spaces and the two quotes.
+        ssid_text(s, VIEW_COLS - CTX_LABEL - DESC_FURNITURE, ssid, sizeof(ssid));
+        snprintf(line, sizeof(line), "%-*s%u  \"%s\"", CTX_LABEL, label, s->number, ssid);
     }
 
     top(line);
@@ -449,7 +459,7 @@ void view_backup_context(const wifi_slot_t *slot, const char *dir, const char *f
     top("BACK UP");
     top("");
 
-    top_slot_line("slot", slot);
+    top_slot_line("connection", slot);
     if (!slot->is_free)
         top_record_line(slot);
 
@@ -461,8 +471,8 @@ void view_backup_context(const wifi_slot_t *slot, const char *dir, const char *f
 
     top("");
     rule(VIEW_TOP);
-    top_a(VIEW_BAD, "! The file stores your WiFi");
-    top_a(VIEW_BAD, "  password in the clear.");
+    top_a(VIEW_BAD, "The backup stores your Wi-Fi password");
+    top_a(VIEW_BAD, "unprotected on the SD card.");
 }
 
 void view_restore_context(const view_restore_ctx_t *ctx)
@@ -493,7 +503,7 @@ void view_restore_context(const view_restore_ctx_t *ctx)
 
     if (ctx->undo != NULL)
     {
-        top_text_line("undo", ctx->undo);
+        top_text_line("copy", ctx->undo);
     }
     else if (ctx->undo_settled)
     {
@@ -501,11 +511,11 @@ void view_restore_context(const view_restore_ctx_t *ctx)
         // user should be worried. The confirm screen says the same thing; this pane keeps
         // saying it while they read the rest.
         if (ctx->dest != NULL && ctx->dest->is_free)
-            top("undo  not needed, slot free");
+            top("copy  not needed, nothing here yet");
         else if (ctx->noop_known && ctx->noop)
-            top("undo  not needed, bytes match");
+            top("copy  not needed, settings already match");
         else
-            top("undo  declined, no copy kept");
+            top("copy  declined, no copy kept");
     }
 
     top("");
@@ -514,69 +524,75 @@ void view_restore_context(const view_restore_ctx_t *ctx)
     if (ctx->noop_known && ctx->noop)
         top_a(VIEW_DIM, "Nothing will be programmed.");
     else if (ctx->dest != NULL)
-        top_a(VIEW_BAD, "! Writes the console flash.");
+        top_a(VIEW_BAD, "Changes your console's settings.");
 }
 
 // --- the bottom pane ---------------------------------------------------------------
 
 void view_list_title(void)
 {
-    // The layout summary that used to sit here moved to the top pane, which freed four
-    // rows: six slots at two rows each plus a key legend is a tight fit in 24.
-    put("Slots");
+    // Nintendo's own word, taken from the console's System Settings rather than from the
+    // flash layout. See docs/HARDWARE.md, "Nintendo calls them connections".
+    put("Connections");
 }
 
-void view_slot(const wifi_slot_t *s, bool cursor)
+void view_conn_row(const wifi_slot_t *s, bool cursor)
 {
     view_line_t line;
-    char crc[16];
-    char ssid[WIFI_SSID_MAX + 2];
-
-    crc_text(s, crc, sizeof(crc));
-
-    // The ">" stays even though the cursor row is now drawn as a bar. The host harness has
-    // no colour, so without it tools/host_slotlist.c --list could not show which row is
-    // selected, and that output is how the screens get read during testing.
     const char *mark = cursor ? ">" : " ";
 
-    // A free slot is dim; a bad checksum on the detail row is loud; the cursor outranks
-    // both, because where you are matters more than what is there.
-    view_attr_t head = cursor ? VIEW_CURSOR : (s->is_free ? VIEW_DIM : VIEW_PLAIN);
-    view_attr_t body = cursor ? VIEW_CURSOR : (s->is_free ? VIEW_DIM : crc_attr(s));
-
+    // An empty connection is one row. There is nothing to say about it beyond that, and
+    // spending a second row on "no security, no family" would make six empty connections
+    // look busier than six configured ones.
     if (s->is_free)
     {
-        snprintf(line, sizeof(line), "%s %u %s (free)",
-                 mark, s->number, family_name(s->family));
-        put_a(head, line);
+        // What this connection accepts, on the cursor row only. On every row it would be six
+        // repetitions of two phrases on a console with nothing saved yet -- which is the first
+        // screen a new user sees -- and the information is only ever needed for the connection
+        // being pointed at. The file picker already expands only its cursor entry for the same
+        // reason, so this is that behaviour reused rather than a new idea.
+        if (cursor)
+            snprintf(line, sizeof(line), "%s %u  Empty   %s",
+                     mark, s->number, family_takes(s->family));
+        else
+            snprintf(line, sizeof(line), "%s %u  Empty", mark, s->number);
 
-        // Free slots say E7=FF outright instead of borrowing the [NN] notation, which
-        // means the security byte everywhere else.
-        snprintf(line, sizeof(line), "    E7=%02X unused     %s", s->status, crc);
-        put_a(body, line);
+        put_a(cursor ? VIEW_CURSOR : VIEW_DIM, line);
         return;
     }
 
-    // SSID_ROOM is 40 at 51 columns, so a full 32-byte SSID now fits here whole. It did
-    // not at 31, where this had 20 and a real name was routinely cut.
+    // SSID_ROOM is 40 at 51 columns, so a full 32-byte name fits here whole.
+    char ssid[WIFI_SSID_MAX + 2];
     ssid_text(s, SSID_ROOM, ssid, sizeof(ssid));
 
-    snprintf(line, sizeof(line), "%s %u %s \"%s\"%s",
-             mark, s->number, family_name(s->family), ssid,
-             s->ssid_printable ? "" : "*");
-    put_a(head, line);
+    snprintf(line, sizeof(line), "%s %u  %s%s", mark, s->number, ssid,
+             s->ssid_printable ? "" : "  (name has odd characters)");
+    put_a(cursor ? VIEW_CURSOR : VIEW_PLAIN, line);
 
-    snprintf(line, sizeof(line), "    %-10s [%02X] %s",
-             wifi_security_label(s), wifi_slot_security_byte(s), crc);
-    put_a(body, line);
+    // The second row is what the connection is, not what bytes say so. Damage is the one
+    // thing worth shouting about, because it is the one thing the user can act on.
+    bool ok = s->crc_ok && (!s->has_crc2 || s->crc2_ok);
+    if (!ok)
+    {
+        put_a(cursor ? VIEW_CURSOR : VIEW_BAD, "     These settings look damaged.");
+        return;
+    }
+
+    snprintf(line, sizeof(line), "     %-*s%s",
+             ROW_SEC_W, security_words(s), family_tag(s->family));
+    put_a(cursor ? VIEW_CURSOR : VIEW_DIM, line);
 }
 
-void view_keys(void)
+
+void view_keys(bool debug)
 {
     put("");
-    put_a(VIEW_DIM, "UP/DN move    A open slot    START exit");
-    put("");
-    put_a(VIEW_DIM, "The top screen shows the slot under the cursor.");
+    put_a(VIEW_DIM, "UP/DN move    A open    START exit");
+
+    // The About screen is raw flash offsets, so it is a Dev-build affordance and says so in
+    // the colour every other debug affordance uses.
+    if (debug)
+        put_a(VIEW_DEBUG, "SELECT  flash layout");
 }
 
 void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename)
@@ -584,19 +600,18 @@ void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename
     view_line_t line;
     char ssid[WIFI_SSID_MAX + 2];
 
-    snprintf(line, sizeof(line), "Back up slot %u?", slot->number);
+    snprintf(line, sizeof(line), "Back up Connection %u?", slot->number);
     put(line);
     put("");
 
-    // "  N FAM " is 8 columns here, leaving room for the quotes.
-    ssid_text(slot, VIEW_COLS - 8 - 2, ssid, sizeof(ssid));
-    snprintf(line, sizeof(line), "  %u %s \"%s\"",
-             slot->number, family_name(slot->family), ssid);
+    // Two columns of indent plus DESC_FURNITURE for the number, spaces and quotes.
+    ssid_text(slot, VIEW_COLS - 2 - DESC_FURNITURE, ssid, sizeof(ssid));
+    snprintf(line, sizeof(line), "  %u  \"%s\"", slot->number, ssid);
     put(line);
 
     put("");
-    put("! The file stores your WiFi");
-    put("  password in the clear.");
+    put_a(VIEW_BAD, "The backup stores your Wi-Fi password unprotected");
+    put_a(VIEW_BAD, "on the SD card. Anyone with the card can read it.");
     put("");
     put(dir);
     put(filename);
@@ -609,16 +624,22 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
 {
     view_line_t line;
 
-    put_a(ok ? VIEW_GOOD : VIEW_BAD, ok ? "Backup written." : "Backup FAILED.");
+    put_a(ok ? VIEW_GOOD : VIEW_BAD, ok ? "Backup saved." : "Backup did not finish.");
     put("");
 
     if (ok)
     {
         put(dir);
         put(filename);
-        snprintf(line, sizeof(line), "%lu bytes, %u record%s",
-                 (unsigned long)bytes, records, (records == 1) ? "" : "s");
-        put(line);
+        // Byte count without the word "record": a user has one backup, not one record in a
+        // file. The count only matters when there is more than one, which the app itself
+        // never writes.
+        if (records > 1)
+            snprintf(line, sizeof(line), "%lu bytes, %u connections", (unsigned long)bytes,
+                     records);
+        else
+            snprintf(line, sizeof(line), "%lu bytes", (unsigned long)bytes);
+        put_a(VIEW_DIM, line);
         put("");
         put("Read back and verified.");
     }
@@ -628,13 +649,13 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
     }
 
     put("");
-    put("B: back");
+    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
 }
 
 // --- restore ---------------------------------------------------------------------
 
-// A slot rendered as text: "1 NTR \"name\"" is at most 9 columns of furniture plus the
-// SSID room the caller allows, which is always less than a row. Sized so the compiler
+// A connection rendered as text: "1  \"name\"" is DESC_FURNITURE columns of furniture plus
+// the SSID room the caller allows, which is always less than a row. Sized so the compiler
 // can see that composing one into a row cannot overflow.
 #define VIEW_DESC 48
 typedef char view_desc_t[VIEW_DESC];
@@ -646,12 +667,12 @@ typedef char view_desc_t[VIEW_DESC];
 _Static_assert(VIEW_DESC > DESC_FURNITURE + WIFI_SSID_MAX,
                "describe() output plus its NUL must fit view_desc_t");
 
-// "1 NTR \"name\"" or "1 NTR (free)", fitted into `room` columns *in total*.
+// "1  \"name\"" or "1  (empty)", fitted into `room` columns *in total*.
 //
 // `room` used to mean the SSID's share alone, and every caller passed VIEW_COLS minus
 // its own prefix -- that is, the room for the whole description. So each one came out
 // DESC_FURNITURE columns too wide, and with a 32-byte SSID the restore screens lost
-// their right edge: "onto  1 NTR \"ABCDEFGHIJKLMNOPQR" with the closing quote cut off.
+// their right edge: "onto  1  \"ABCDEFGHIJKLMNOPQRSTU" with the closing quote cut off.
 // Both SSIDs in the test inputs are 3 and 6 bytes, so it never showed. The width phase
 // of tools/crosscheck.py exists because of this.
 //
@@ -661,51 +682,96 @@ static void describe(const wifi_slot_t *s, int room, char *out, size_t out_len)
 {
     if (s->is_free)
     {
-        snprintf(out, out_len, "%u %s (free)", s->number, family_name(s->family));
+        snprintf(out, out_len, "%u  (empty)", s->number);
         return;
     }
 
     char ssid[WIFI_SSID_MAX + 2];
     ssid_text(s, room - DESC_FURNITURE, ssid, sizeof(ssid));
-    snprintf(out, out_len, "%u %s \"%s\"", s->number, family_name(s->family), ssid);
+    snprintf(out, out_len, "%u  \"%s\"", s->number, ssid);
 }
 
+// A record fits a slot when the families match. That is the whole rule: a 0x200 record
+// carries a passphrase and a precomputed PSK that physically do not fit in a 0x100 slot, and
+// widening the other way is deliberately out of scope. restore_check() still has the final
+// say before any byte is written; this only decides what the user is offered.
+bool view_record_fits(const wifi_slot_t *rec, const wifi_slot_t *dest)
+{
+    return rec->family == dest->family;
+}
+
+bool view_entry_fits(const backup_entry_t *entry, const wifi_slot_t *dest)
+{
+    if (!entry->ok)
+        return false;
+
+    for (uint8_t r = 0; r < entry->count; r++)
+    {
+        if (view_record_fits(&entry->rec[r], dest))
+            return true;
+    }
+    return false;
+}
+
+uint8_t view_entry_count_fitting(const backup_entry_t *entries, uint8_t count,
+                                 const wifi_slot_t *dest)
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < count; i++)
+    {
+        if (view_entry_fits(&entries[i], dest))
+            n++;
+    }
+    return n;
+}
+
+// Only entries that can land in `dest` are drawn at all. An earlier version showed the rest
+// dimmed with a reason, on the theory that hiding raises "where did my backup go?". It does
+// not: the picker's job is to choose a backup for this slot, and one that cannot go here is
+// not a candidate. When nothing fits, view_none_fit() answers that question properly, with
+// room to explain; when something fits, the user gets on with it.
+//
+// `cursor` and `top` index the entries that fit, not the whole array.
 void view_pick_file(const backup_entry_t *entries, uint8_t count, uint8_t cursor,
-                    uint8_t top)
+                    uint8_t top, const wifi_slot_t *dest)
 {
     view_line_t line;
+    uint8_t fitting = view_entry_count_fitting(entries, count, dest);
 
-    snprintf(line, sizeof(line), "Restore: pick a file (%u)", count);
+    snprintf(line, sizeof(line), "Restore into Connection %u: pick a backup (%u)",
+             dest->number, fitting);
     put(line);
     put("");
 
-    for (uint8_t i = top; i < count && i < (uint8_t)(top + VIEW_PICK_ROWS); i++)
+    uint8_t drawn = 0;
+    for (uint8_t i = 0; i < count; i++)
     {
-        snprintf(line, sizeof(line), "%s %s", (i == cursor) ? ">" : " ",
-                 entries[i].name);
-        put(line);
-
-        // Only the highlighted file expands. Everything the detail shows was decoded
-        // when the card was scanned, so moving the cursor never reopens a file.
-        if (i != cursor)
+        if (!view_entry_fits(&entries[i], dest))
             continue;
 
-        snprintf(line, sizeof(line), "    from %s", entries[i].dir);
-        put(line);
-
-        if (!entries[i].ok)
+        if (drawn < top || drawn >= (uint8_t)(top + VIEW_PICK_ROWS))
         {
-            // The reason goes on its own row: sharing one with a label cut the longer
-            // parse errors off mid-word.
-            put("    unreadable:");
-            snprintf(line, sizeof(line), "    %s",
-                     entries[i].problem ? entries[i].problem : "bad file");
-            put(line);
+            drawn++;
             continue;
         }
 
+        bool sel = (drawn == cursor);
+        snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", entries[i].name);
+        put_a(sel ? VIEW_CURSOR : VIEW_PLAIN, line);
+        drawn++;
+
+        // Only the highlighted file expands. Everything the detail shows was decoded
+        // when the card was scanned, so moving the cursor never reopens a file.
+        if (!sel)
+            continue;
+
+        snprintf(line, sizeof(line), "    from %s", entries[i].dir);
+        put_a(VIEW_DIM, line);
+
         for (uint8_t r = 0; r < entries[i].count; r++)
         {
+            if (!view_record_fits(&entries[i].rec[r], dest))
+                continue;
             view_desc_t what;
             describe(&entries[i].rec[r], VIEW_COLS - 4, what, sizeof(what));
             snprintf(line, sizeof(line), "    %s", what);
@@ -714,28 +780,60 @@ void view_pick_file(const backup_entry_t *entries, uint8_t count, uint8_t cursor
     }
 
     put("");
-    if (count > VIEW_PICK_ROWS)
-        put("UP/DN scroll  A pick  B back");
-    else
-        put("UP/DN move  A pick  B back");
+    put_a(VIEW_DIM, (fitting > VIEW_PICK_ROWS)
+        ? "UP/DN scroll   A pick   X delete   B back"
+        : "UP/DN move   A pick   X delete   B back");
 }
 
-void view_pick_record(const backup_entry_t *entry, uint8_t cursor)
+void view_none_fit(const wifi_slot_t *dest)
 {
     view_line_t line;
 
-    put("Restore: pick a record");
+    snprintf(line, sizeof(line), "No backup fits Connection %u.", dest->number);
+    put(line);
+    put("");
+
+    // Says which connections a backup has to come from, rather than what a record can hold.
+    // Earlier versions explained by console ("one the DS can read too") and then by capability
+    // ("no room for a WPA password"); neither told the user where to look instead.
+    if (dest->family == WIFI_FAMILY_TWL)
+    {
+        put("Only a backup from Connections 4-6 fits here, and");
+        put("every backup on the card came from Connections 1-3.");
+    }
+    else
+    {
+        put("Only a backup from Connections 1-3 fits here, and");
+        put("every backup on the card came from Connections 4-6.");
+    }
+
+    put("");
+    put_a(VIEW_DIM, "B  back");
+}
+
+void view_pick_record(const backup_entry_t *entry, uint8_t cursor,
+                      const wifi_slot_t *dest)
+{
+    view_line_t line;
+
+    snprintf(line, sizeof(line), "Restore into Connection %u: pick a backup", dest->number);
+    put(line);
     put(entry->name);
     put("");
 
+    // Records that cannot land here are not drawn, for the same reason files are not.
     for (uint8_t i = 0; i < entry->count; i++)
     {
         const wifi_slot_t *s = &entry->rec[i];
+        if (!view_record_fits(s, dest))
+            continue;
+
         view_desc_t what;
+        bool sel = (i == cursor);
 
         describe(s, VIEW_COLS - 2, what, sizeof(what));
-        snprintf(line, sizeof(line), "%s %s", (i == cursor) ? ">" : " ", what);
-        put(line);
+        snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", what);
+        put_a(sel ? VIEW_CURSOR : VIEW_PLAIN, line);
 
         char crc[16];
         crc_text(s, crc, sizeof(crc));
@@ -745,15 +843,23 @@ void view_pick_record(const backup_entry_t *entry, uint8_t cursor)
     }
 
     put("");
-    put("A pick   B back");
+    put_a(VIEW_DIM, "A pick   B back");
 }
 
-void view_undo_prompt(const wifi_slot_t *dest)
+// A cursor menu, not three buttons.
+//
+// This asked A for yes, X for no and B for cancel, which was the only three-button choice in
+// the app and put the destructive option -- overwrite with no copy -- on a key with no
+// conventional meaning on this console. Everywhere else here, and everywhere on a DS, A
+// confirms and B goes back while a cursor picks between options. It reads the same way now
+// as the connection screen does, and "overwrite without a copy" has to be moved to rather than
+// being one press away.
+void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor)
 {
     view_line_t line;
     view_desc_t what;
 
-    snprintf(line, sizeof(line), "Slot %u is in use:", dest->number);
+    snprintf(line, sizeof(line), "Connection %u already has settings:", dest->number);
     put(line);
 
     describe(dest, VIEW_COLS - 2, what, sizeof(what));
@@ -761,21 +867,42 @@ void view_undo_prompt(const wifi_slot_t *dest)
     put(line);
 
     put("");
-    put("Restoring overwrites it.");
-    put("Save a copy to the SD first?");
+    put_a(VIEW_BAD, "Restoring overwrites it.");
     put("");
-    put("A  yes, back it up");
-    put("X  no, overwrite it");
-    put("B  cancel");
+
+    for (uint8_t i = 0; i < UNDO_CHOICE_COUNT; i++)
+    {
+        snprintf(line, sizeof(line), "%s %s", (i == cursor) ? ">" : " ",
+                 (i == UNDO_SAVE_COPY) ? "Save a copy to the SD first, then restore"
+                                       : "Restore without saving a copy");
+        put_a((i == cursor) ? VIEW_CURSOR : VIEW_PLAIN, line);
+    }
+
+    put("");
+    put_a(VIEW_DIM, "A choose    B cancel");
+}
+
+// Directions as the renderer's arrow glyphs, which are real triangles rather than the
+// '^' 'v' '<' '>' this used to spell them with. Their codepoints sit below 0x20 where no
+// user-supplied string can reach; see fb_render.h.
+char view_combo_symbol(uint8_t dir)
+{
+    switch (dir & 3)
+    {
+        case 0:  return FB_UP;
+        case 1:  return FB_DOWN;
+        case 2:  return FB_LEFT;
+        default: return FB_RIGHT;
+    }
 }
 
 void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
-                          const char *undo_name)
+                          const char *undo_name, const uint8_t *seq, uint8_t at)
 {
     view_line_t line;
     view_desc_t what;
 
-    snprintf(line, sizeof(line), "Restore into slot %u", dest->number);
+    snprintf(line, sizeof(line), "Restore into Connection %u", dest->number);
     put(line);
     put("");
 
@@ -796,13 +923,49 @@ void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
     }
     else if (!dest->is_free)
     {
-        put_a(VIEW_BAD, "! Slot contents will be lost, with no copy kept.");
+        put_a(VIEW_BAD, "Its settings will be lost, with no copy kept.");
         put("");
     }
 
-    put_a(VIEW_BAD, "This writes the console flash.");
+    put_a(VIEW_BAD, "This changes your console's settings.");
+    put("");
 
-    put("A write     B cancel");
+    // The sequence, spaced wide so a glance cannot mistake one symbol for its neighbour.
+    char combo[VIEW_COMBO_LEN * 4 + 2];
+    int at_col = 0;
+    for (uint8_t i = 0; i < VIEW_COMBO_LEN; i++)
+    {
+        combo[i * 4 + 0] = view_combo_symbol(seq[i]);
+        combo[i * 4 + 1] = ' ';
+        combo[i * 4 + 2] = ' ';
+        combo[i * 4 + 3] = ' ';
+        if (i == at)
+            at_col = i * 4;
+    }
+    combo[VIEW_COMBO_LEN * 4] = 'A';
+    combo[VIEW_COMBO_LEN * 4 + 1] = '\0';
+    if (at >= VIEW_COMBO_LEN)
+        at_col = VIEW_COMBO_LEN * 4;
+
+    put("Enter this to continue:");
+    put("");
+    snprintf(line, sizeof(line), "    %s", combo);
+    put_a(VIEW_ACCENT, line);
+
+    // An underline beneath the next symbol. Progress is shown under the row rather than by
+    // redrawing the row itself, because a sequence that changes as you enter it invites
+    // misreading the part you have not reached.
+    //
+    // A '-' rather than a '^': the symbols above are now real triangles, and a caret sitting
+    // directly under the up arrow read as a second, smaller arrow.
+    char caret[VIEW_COMBO_LEN * 4 + 8];
+    memset(caret, ' ', sizeof(caret));
+    caret[4 + at_col] = '-';
+    caret[4 + at_col + 1] = '\0';
+    put_a(VIEW_ACCENT, caret);
+
+    put("");
+    put_a(VIEW_DIM, "B cancels");
 }
 
 void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
@@ -810,7 +973,7 @@ void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
 {
     view_line_t line;
 
-    put_a(ok ? VIEW_GOOD : VIEW_BAD, ok ? "Restore done." : "Restore FAILED.");
+    put_a(ok ? VIEW_GOOD : VIEW_BAD, ok ? "Restore done." : "Restore did not finish.");
     put("");
 
     if (!ok && detail != NULL)
@@ -837,7 +1000,7 @@ void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
     }
     else
     {
-        snprintf(line, sizeof(line), "Slot %u could not be read back,", dest_number);
+        snprintf(line, sizeof(line), "Connection %u could not be read back,", dest_number);
         put(line);
         put("so what it holds is unknown.");
     }
@@ -850,56 +1013,43 @@ void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
     }
 
     put("");
-    put("B: back");
+    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
 }
 
-void view_no_backups(void)
-{
-    put("");
-    put("No backup files found.");
-    put("");
-    put("Looked in DSIWIFI/ for any");
-    put("folder holding .dswifi files.");
-    put("");
-    put("Take a backup first, or copy");
-    put("one onto the card.");
-}
 
-// --- the slot screen ------------------------------------------------------------------
+// --- the connection screen -----------------------------------------------------------
 
-uint8_t view_slot_action_count(const wifi_slot_t *slot)
+uint8_t view_conn_action_count(const wifi_slot_t *slot)
 {
     // A free slot has nothing to copy out of it, so backup is not offered at all. That
     // replaces the old message telling the user to go and stand somewhere else.
-    return slot->is_free ? 1 : SLOT_ACTION_COUNT;
+    return slot->is_free ? 1 : CONN_ACTION_COUNT;
 }
 
-slot_action_t view_slot_action_at(const wifi_slot_t *slot, uint8_t index)
+conn_action_t view_conn_action_at(const wifi_slot_t *slot, uint8_t index)
 {
     if (slot->is_free)
-        return SLOT_ACTION_RESTORE;
+        return CONN_ACTION_RESTORE;
 
-    return (index == 0) ? SLOT_ACTION_BACKUP : SLOT_ACTION_RESTORE;
+    return (index == 0) ? CONN_ACTION_BACKUP : CONN_ACTION_RESTORE;
 }
 
-static const char *action_words(slot_action_t a)
+static const char *action_words(conn_action_t a)
 {
-    return (a == SLOT_ACTION_BACKUP) ? "Back up this slot to the SD card"
-                                     : "Restore a backup into this slot";
+    return (a == CONN_ACTION_BACKUP) ? "Back up this connection to the SD card"
+                                     : "Restore a backup into this connection";
 }
 
-void view_slot_screen(const wifi_slot_t *s, uint8_t cursor)
+void view_conn_screen(const wifi_slot_t *s, uint8_t cursor)
 {
     view_line_t line;
-    char crc[16];
 
     if (s->is_free)
     {
-        snprintf(line, sizeof(line), "Slot %u  %s   empty",
-                 s->number, family_name(s->family));
+        snprintf(line, sizeof(line), "Connection %u   empty", s->number);
         put_a(VIEW_DIM, line);
         put("");
-        put("Nothing is saved in this slot.");
+        put("Nothing is saved in this connection.");
     }
     else
     {
@@ -907,22 +1057,20 @@ void view_slot_screen(const wifi_slot_t *s, uint8_t cursor)
 
         // The whole SSID fits: this row spends only the slot number and family before it.
         ssid_text(s, VIEW_COLS - 16, ssid, sizeof(ssid));
-        snprintf(line, sizeof(line), "Slot %u  %s   \"%s\"",
-                 s->number, family_name(s->family), ssid);
+        snprintf(line, sizeof(line), "Connection %u   \"%s\"", s->number, ssid);
         put(line);
 
-        crc_text(s, crc, sizeof(crc));
-        snprintf(line, sizeof(line), "%-12s%s", wifi_security_label(s), crc);
-        put_a(crc_attr(s), line);
     }
 
     put("");
+    view_conn_detail(s);
+    put("");
 
-    uint8_t n = view_slot_action_count(s);
+    uint8_t n = view_conn_action_count(s);
     for (uint8_t i = 0; i < n; i++)
     {
         snprintf(line, sizeof(line), "%s %s", (i == cursor) ? ">" : " ",
-                 action_words(view_slot_action_at(s, i)));
+                 action_words(view_conn_action_at(s, i)));
         put_a((i == cursor) ? VIEW_CURSOR : VIEW_PLAIN, line);
     }
 
@@ -937,7 +1085,7 @@ void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
     put_a(VIEW_GOOD, "Nothing to restore.");
     put("");
 
-    snprintf(line, sizeof(line), "Slot %u already holds exactly that backup,",
+    snprintf(line, sizeof(line), "Connection %u already holds exactly that backup,",
              dest->number);
     put(line);
     put("byte for byte. Nothing was written.");
@@ -945,14 +1093,183 @@ void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
 
     if (allow_force)
     {
-        put_a(VIEW_DIM, "Debug build: the write can be run anyway.");
-        put_a(VIEW_DIM, "It programs zero bytes, because libnds skips");
-        put_a(VIEW_DIM, "any page whose contents already match.");
+        // The whole block, the action line included. Colouring only the headline left the
+        // key that actually triggers the forced write looking like an ordinary hint.
+        put_a(VIEW_DEBUG, "Debug build: the write can be run anyway.");
+        put_a(VIEW_DEBUG, "It programs zero bytes, because libnds skips");
+        put_a(VIEW_DEBUG, "any page whose contents already match.");
         put("");
-        put_a(VIEW_DIM, "X write anyway    B back");
+        put_a(VIEW_DEBUG, "X write anyway    B back");
     }
     else
     {
         put_a(VIEW_DIM, "B back");
     }
+}
+
+// --- the slot's full decode, on the bottom screen ------------------------------------
+//
+// This is what the top pane used to carry. It moved because the top screen sits further
+// from the eye, cannot scroll and cannot be touched, and because P1 Tier B will add the
+// secrets block and push this past 24 rows.
+void view_conn_detail(const wifi_slot_t *s)
+{
+    view_line_t line;
+    char crc[16];
+
+    // The raw offset and length: the one pair of facts that ties a slot on screen to a
+    // range in a flash dump, which is how every hardware finding here was checked.
+    snprintf(line, sizeof(line), "0x%05lX  %u bytes    status 0x%02X    config 0x%02X",
+             (unsigned long)s->offset, s->length, s->status, s->config_bits);
+    put_a(VIEW_DIM, line);
+
+    crc_text(s, crc, sizeof(crc));
+
+    if (s->is_free)
+    {
+        // Do not name a security mode for a slot holding no network. wifi_security_label()
+        // reads "open" for the 0x00 a free slot happens to carry, and printing that directly
+        // under "nothing is saved in this slot" states two contradictory things. The raw byte
+        // still appears, because that is the rule; only the interpretation is withheld.
+        snprintf(line, sizeof(line), "%-*s[%02X]  no network here   %s",
+                 DETAIL_LABEL, "Security", wifi_slot_security_byte(s), crc);
+        put_a(crc_attr(s), line);
+        return;
+    }
+
+    snprintf(line, sizeof(line), "%-*s%-10s [%02X]   %s", DETAIL_LABEL, "Security",
+             wifi_security_label(s), wifi_slot_security_byte(s), crc);
+    put_a(crc_attr(s), line);
+
+    put("");
+
+    detail_cell_t l[2];
+    detail_cell_t r[4];
+    char v[40];
+
+    addr_text(s->ip, "automatic (DHCP)", v, sizeof(v));
+    detail_cell(l[0], "Address", v);
+    addr_text(s->gateway, "automatic", v, sizeof(v));
+    detail_cell(l[1], "Gateway", v);
+
+    addr_text(s->dns1, "not set", v, sizeof(v));
+    detail_cell(r[0], "DNS 1", v);
+    addr_text(s->dns2, "not set", v, sizeof(v));
+    detail_cell(r[1], "DNS 2", v);
+
+    // Printed as they read. Subnet 0 and MTU 0 are both what a working connection stores on
+    // the reference DSi, and MTU 0 is the value System Settings later rewrites to 1400, so
+    // dressing either up as invalid would contradict a hardware finding.
+    snprintf(v, sizeof(v), "/%u", s->subnet_prefix);
+    detail_cell(r[2], "Subnet", v);
+    snprintf(v, sizeof(v), "%u", s->mtu);
+    detail_cell(r[3], "MTU", v);
+
+    for (int i = 0; i < 4; i++)
+        detail_row((i < 2) ? l[i] : "", r[i]);
+}
+
+// The layout the header used to occupy on every screen. Constant for the session, so it is
+// seen once on request rather than redrawn on every cursor move.
+void view_about(const wifi_layout_t *layout)
+{
+    view_line_t line;
+
+    // Its own label width: "Flash type" is ten characters and DETAIL_LABEL is nine, so
+    // reusing that one silently ran the label into its value.
+    const int lw = 12;
+
+    // Every line is VIEW_DEBUG, not just a heading. main.c only opens this screen in a Dev
+    // build, and a screen that exists in one build and not the other should be unmistakable
+    // the moment it appears rather than after reading it.
+    put_a(VIEW_DEBUG, "About this console");
+    put("");
+
+    snprintf(line, sizeof(line), "%-*s0x%02X  %s", lw, "Flash type",
+             layout->console_type, layout->is_dsi ? "DSi" : "Nintendo DS");
+    put_a(VIEW_DEBUG, line);
+
+    snprintf(line, sizeof(line), "%-*s%u", lw, "Connections", layout->count);
+    put_a(VIEW_DEBUG, line);
+
+    snprintf(line, sizeof(line), "%-*s0x%05lX-0x%05lX", lw, "Wi-Fi area",
+             (unsigned long)layout->region_start, (unsigned long)(layout->base - 1));
+    put_a(VIEW_DEBUG, line);
+
+    snprintf(line, sizeof(line), "%-*s0x%05lX", lw, "Settings",
+             (unsigned long)layout->base);
+    put_a(VIEW_DEBUG, line);
+
+    put("");
+    put_a(VIEW_DEBUG, "Connection positions are read from the console,");
+    put_a(VIEW_DEBUG, "never assumed, so a console laid out");
+    put_a(VIEW_DEBUG, "differently still decodes correctly.");
+    put("");
+    put_a(VIEW_DEBUG, "B back");
+}
+
+void view_no_backups(void)
+{
+    put("No backups on the card.");
+    put("");
+    put("Every folder under DSIWIFI/ was searched for");
+    put(".dswifi files and none were found.");
+    put("");
+    put("Back up a connection first, or copy a backup from");
+    put("another console onto the card.");
+    put("");
+    put_a(VIEW_DIM, "B  back");
+}
+
+// --- deleting a backup ----------------------------------------------------------------
+
+void view_delete_confirm(const backup_entry_t *entry, uint8_t cursor)
+{
+    view_line_t line;
+
+    put("Delete this backup?");
+    put("");
+
+    snprintf(line, sizeof(line), "  %s", entry->name);
+    put(line);
+    snprintf(line, sizeof(line), "  from %s", entry->dir);
+    put_a(VIEW_DIM, line);
+    put("");
+
+    // Say what is not affected as well as what is. The file and the connection have similar
+    // names on screen, and someone reaching for "delete" wants to be sure which one goes.
+    put_a(VIEW_BAD, "This cannot be undone.");
+    put("Your console's settings are not affected, only");
+    put("this file on the SD card.");
+    put("");
+
+    for (uint8_t i = 0; i < DELETE_CHOICE_COUNT; i++)
+    {
+        snprintf(line, sizeof(line), "%s %s", (i == cursor) ? ">" : " ",
+                 (i == DELETE_KEEP) ? "Keep it" : "Delete it");
+        put_a((i == cursor) ? VIEW_CURSOR : VIEW_PLAIN, line);
+    }
+
+    put("");
+    put_a(VIEW_DIM, "A choose    B cancel");
+}
+
+void view_delete_result(bool ok, const char *name, const char *detail)
+{
+    view_line_t line;
+
+    put_a(ok ? VIEW_GOOD : VIEW_BAD, ok ? "Backup deleted." : "Could not delete it.");
+    put("");
+
+    snprintf(line, sizeof(line), "  %s", name);
+    put_a(VIEW_DIM, line);
+
+    if (!ok && detail != NULL)
+    {
+        put("");
+        put_a(VIEW_DIM, detail);
+    }
+
+    put("");
+    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
 }

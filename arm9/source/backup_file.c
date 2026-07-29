@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // See backup_file.h.
 
 #include <stdio.h>

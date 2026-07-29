@@ -3,7 +3,7 @@
 
     python3 tools/decode_backup.py DSIWIFI/0009BF010203/wifi000.dswifi
 
-The format is in DESIGN.md and arm9/source/backup_file.h:
+The format is in arm9/source/backup_file.h:
 
     "DSIWIFI1"  magic
     u8          record count

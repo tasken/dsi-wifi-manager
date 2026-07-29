@@ -51,12 +51,11 @@ def build():
     # -Wformat-truncation among them, need optimisation to do their analysis and say
     # nothing at -O0. Without it this build passed clean while the ARM9 build emitted
     # eleven truncation warnings, which is the gate failing to gate.
-    # A deliberately long version, not the real one. It comes from git at build time, so
-    # its length varies with the branch name, and the banner right-aligns it: the width the
-    # console actually draws is whatever today's branch happens to make it. Testing the worst
-    # case here means a build on a long branch cannot be the thing that discovers the banner
-    # does not fit.
-    version = "Dev feature-some-long-branch-name-abc1234-dirty"
+    # Deliberately longer than any real version, because the banner right-aligns this and a
+    # string that overflows would fail the widths phase on a build that is otherwise fine.
+    # A real one is now short -- "Dev 18975b7-dirty", or "Release v1.2.3" -- since the branch
+    # was dropped from it. Testing well past that keeps the cut path exercised anyway.
+    version = "Dev an-unreasonably-long-version-string-abc1234-dirty"
 
     cmd = ["gcc", "-std=gnu17", "-Wall", "-Wextra", "-Werror", "-O2",
            f'-DDSIWIFI_VERSION_STR="{version}"',
@@ -551,7 +550,81 @@ def check_names():
     return 0
 
 
+def ensure_fixture(paths):
+    """Regenerate build/fixture.bin if it is missing.
+
+    The fixture is the fifth test input and the only one with a configured WPA record, a
+    32-byte SSID and a non-printable SSID -- so losing it silently narrows the suite. It is
+    also generated, gitignored, and lives in build/, which `./build.sh` wipes on every clean
+    build. Running the suite after a build therefore failed with `cannot open
+    build/fixture.bin`, which reads like a code regression and is not one.
+
+    Regenerating is safe because the fixture is deterministic: make_fixture.py takes no
+    randomness, so the file this writes is the file the last run used.
+    """
+    for p in paths:
+        if os.path.basename(p) != "fixture.bin" or os.path.exists(p):
+            continue
+        print(f"{p} is missing (./build.sh wipes build/); regenerating")
+        # The directory has to exist first. `make clean` removes build/ entirely, and this
+        # runs before build() creates it again -- so without this line the one situation this
+        # function was written for is the one where it crashes.
+        os.makedirs(os.path.dirname(os.path.abspath(p)) or ".", exist_ok=True)
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make_fixture.py"), p],
+                       check=True, stdout=subprocess.DEVNULL)
+
+
+
+# --- docs: no real console values --------------------------------------------------------
+# Not a doc-quality check. The notes are tracked in git now, so a MAC or a network name pasted
+# into one and pushed cannot be taken back. Needles come from the dump being tested, so this
+# only runs when a real dump is among the inputs, and the values themselves are never printed.
+def check_doc_secrets(paths):
+    import glob
+
+    dumps = [p for p in paths if "fixture" not in p and "testdata" not in p]
+    if not dumps:
+        print("docs\n  skip: no real dump among the inputs")
+        return 0
+
+    fw = open(dumps[0], "rb").read()
+    mac = fw[0x36:0x3C]
+    base = (fw[0x20] | (fw[0x21] << 8)) * 8
+    rec = fw[base - 0x400:base - 0x300]
+    ssid = rec[0:32].split(b"\x00")[0].decode("ascii", "replace")
+
+    needles = {
+        "MAC": mac.hex().upper(),
+        "MAC lowercase": mac.hex().lower(),
+        "MAC with colons": ":".join(f"{b:02X}" for b in mac),
+        "WFC user ID": rec[0xF0:0xF6].hex().upper(),
+    }
+    if len(ssid) >= 4:
+        needles["network name"] = ssid
+
+    docs = ["README.md"] + sorted(glob.glob("docs/**/*.md",
+                                                                     recursive=True))
+    print("docs")
+    bad = 0
+    for d in docs:
+        path = os.path.join(ROOT, d)
+        if not os.path.exists(path):
+            continue
+        text = open(path, encoding="utf-8", errors="ignore").read()
+        for name, value in needles.items():
+            if len(value) >= 4 and value in text:
+                print(f"  LEAK {d} contains this console's {name}")
+                bad += 1
+
+    if bad:
+        print(f"FAIL: {bad} real console value(s) in tracked notes")
+        return 1
+    print(f"PASS: {len(docs)} notes carry no real console values")
+    return 0
+
+
 def main(paths):
+    ensure_fixture(paths)
     build()
     failures = []
     rc = check_names()
@@ -559,6 +632,8 @@ def main(paths):
         failures.append("naming")
     if check_render():
         failures.append("renderer")
+    if check_doc_secrets(paths):
+        failures.append("docs")
     for p in paths:
         rc = check_dump(p)
         rc |= check_backup(p)

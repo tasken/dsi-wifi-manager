@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a synthetic 128 KB DSi wifi flash containing known AP records.
 
-This is the positive control for scan_nand_full.py: if the scanner cannot find records that
+This is the positive control for the NAND scanner: if a scanner cannot find records that
 are definitely there, "0 found in the NAND" means nothing. It doubles as the test fixture for
 the decoder, since no real dump exists yet.
 
@@ -110,7 +110,18 @@ slots = {
     # compare the name by length rather than by text. Until this existed, the overflow in
     # that branch was invisible: every SSID in every test input was plain ASCII.
     4: (BASE - 0xA00, twl_record("4ds-5g\xe9wifi", "correcthorsebattery")),
-    5: (BASE - 0x800, empty_record(TWL_LEN)),
+    # Security 0x05, one of the values still inferred from the System Settings menu order
+    # rather than observed. That is the point: an unconfirmed value is the only thing that
+    # makes security_words() return "Password protected, type unconfirmed", which at 36
+    # characters is the longest security phrase the list row can carry. Every other record in
+    # every input decodes as open, WEP, or the confirmed 0x07, so without this the widest
+    # possible row is never drawn and its width is never checked -- the same hole the 32-byte
+    # SSID above was added to close.
+    #
+    # It is a test input, not evidence. docs/HARDWARE.md's "The one real WPA record" still records
+    # 0x07 as the only confirmed value, and only a TKIP network configured on hardware can
+    # settle 0x04-0x06.
+    5: (BASE - 0x800, twl_record("tkip-guess-net", "hunter2hunter2", security=0x05)),
     6: (BASE - 0x600, empty_record(TWL_LEN)),
 }
 for n, (off, rec) in sorted(slots.items()):

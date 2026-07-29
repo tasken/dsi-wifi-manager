@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // Every screen the app draws. Portable for the same reason wifi_slots.c is: it composes
 // finished lines and hands each one to a sink the caller installs, so tools/host_slotlist.c
 // --screens renders the exact bytes the console shows and a line that would wrap is
@@ -15,45 +13,32 @@
 #include "backup_file.h"
 #include "wifi_slots.h"
 
-// Columns available on a screen. This is FB_COLS: 256 pixels of screen over a 5-pixel
-// glyph is 51, with one pixel to spare.
-//
-// It used to be 31, one short of the 32 a tile console gives, because that console wraps
-// and a wrapped line turns one entry into two. The framebuffer clips instead of wrapping,
-// so the margin is no longer needed for that; the cut stays as a bound on what any screen
-// can emit, and tools/crosscheck.py fails the build if a line exceeds it.
+// Columns available on a screen: FB_COLS, 256 pixels over a 5-pixel glyph, one pixel spare.
+// A bound on what any screen may emit; the widths phase of tools/crosscheck.py enforces it.
 #define VIEW_COLS 51
 
-// The app draws on both screens. The bottom one is where the user acts: lists, prompts,
-// results, one step at a time. The top one holds context that must not disappear when the
-// bottom screen moves on -- which slot, which file, what is about to be written.
+// Bottom = where the user acts, one step at a time. Top = context that must survive the bottom
+// screen moving on.
 //
-// Splitting them is why the sink exists. On the console each pane is a framebuffer and the
-// sink draws into one; on the host they are two tagged streams, each checked for width and
-// height on its own. Without the pane argument the two would interleave and those checks
-// would be meaningless.
-//
-// The sink is also what let the renderer be replaced. This started on the libnds tile
-// console at 32 columns and moved to a bitmap at 51 without slot_list_view.c changing
-// beyond VIEW_COLS, because nothing here knows what a pane physically is.
+// The tag is what keeps the two panes separately measurable on the host. Drop it and they
+// interleave, and the width and height checks measure the wrong screen.
 typedef enum {
     VIEW_BOTTOM = 0,
     VIEW_TOP = 1
 } view_pane_t;
 
-// How a line should read, not what colour it is. The sink owns the palette, because the
-// console and the host answer that question differently and neither answer belongs here.
+// How a line should read, not what colour it is -- the sink owns the palette.
 //
-// Carried beside the line rather than embedded in it as an escape sequence. Escapes would
-// work on screen, but then strlen() counts them as visible columns and the width check in
-// tools/crosscheck.py would depend on stripping them with a pattern. An attribute keeps
-// the string exactly the characters that get drawn.
+// Beside the line, never embedded as an escape sequence: strlen() would then count escapes as
+// visible columns and the width check would have to strip them with a pattern.
 typedef enum {
     VIEW_PLAIN = 0,
     VIEW_DIM,       // present but not the point: a free slot, a hint
     VIEW_GOOD,      // a checksum that verifies
     VIEW_BAD,       // a checksum that does not, a refusal, a warning
-    VIEW_CURSOR     // the row under the cursor, drawn as a bar
+    VIEW_ACCENT,    // something to act on: the sequence that confirms a write
+    VIEW_CURSOR,    // the row under the cursor, drawn as a bar
+    VIEW_DEBUG      // present only in a Dev build: raw offsets, forced writes
 } view_attr_t;
 
 typedef void (*view_sink_t)(view_pane_t pane, view_attr_t attr, const char *line);
@@ -67,10 +52,13 @@ void view_set_sink(view_sink_t sink);
 // Each of these draws the whole top screen, banner included. The caller clears the pane
 // and calls exactly one of them; they are not composable.
 
-// The list screen's companion: the full decode of the slot under the cursor, laid out in
-// two columns -- identity on the left, network settings on the right. This is the app's
-// detail view; there is no separate screen for it.
-void view_detail(const wifi_layout_t *layout, const wifi_slot_t *slot);
+// A glanceable summary of the slot under the cursor, in words -- not a datasheet. The full
+// decode is on the connection screen.
+void view_summary(const wifi_layout_t *layout, const wifi_slot_t *slot, uint8_t of);
+
+// The full decode, on the bottom screen, under the slot's own heading and above its actions.
+// Reached by pressing A on a slot, which is a deliberate act of looking closely.
+void view_conn_detail(const wifi_slot_t *slot);
 
 // Held on screen for every step of a backup, so the confirm screen is not the only place
 // that says which slot and which file.
@@ -106,38 +94,43 @@ void view_idle_context(const wifi_layout_t *layout);
 // --- the bottom pane ---------------------------------------------------------------
 
 // One slot, two rows. `cursor` draws the ">" marker.
-void view_slot(const wifi_slot_t *slot, bool cursor);
+void view_conn_row(const wifi_slot_t *slot, bool cursor);
 
-// The list's own title row. Short, because the layout it used to also print moved to the
-// top pane, where there is room to spell it out.
+// The list's own title row.
 void view_list_title(void);
 
-void view_keys(void);
+// `debug` adds the hints for affordances a Release build does not have. main.c passes
+// DSIWIFI_DEBUG rather than this file testing it, so the host harness can draw both variants.
+void view_keys(bool debug);
 
-// --- the slot screen -----------------------------------------------------------------
+// --- the connection screen -----------------------------------------------------------
 //
 // Reached with A from the list, left with B. The list chooses; this is where things happen.
-// The top pane already carries the full decode, so this carries the identity in one line
-// and the actions.
+// The top pane carries a glanceable summary; this carries the full decode and the actions,
+// because arriving here is a deliberate act of looking closely.
 //
 // Only possible actions are offered. A free slot holds no network, so it has nothing to
 // back up and shows restore alone -- an option that is absent rather than an error message
 // explaining why the option you just picked was not available.
 typedef enum {
-    SLOT_ACTION_BACKUP = 0,
-    SLOT_ACTION_RESTORE,
-    SLOT_ACTION_COUNT
-} slot_action_t;
+    CONN_ACTION_BACKUP = 0,
+    CONN_ACTION_RESTORE,
+    CONN_ACTION_COUNT
+} conn_action_t;
 
 // How many actions this slot offers, and which action is at index `i`. Both live here
 // rather than in main.c so the host harness draws the same menu the console does.
-uint8_t view_slot_action_count(const wifi_slot_t *slot);
-slot_action_t view_slot_action_at(const wifi_slot_t *slot, uint8_t index);
+uint8_t view_conn_action_count(const wifi_slot_t *slot);
+conn_action_t view_conn_action_at(const wifi_slot_t *slot, uint8_t index);
 
-void view_slot_screen(const wifi_slot_t *slot, uint8_t cursor);
+void view_conn_screen(const wifi_slot_t *slot, uint8_t cursor);
+
+// The console's flash layout, on request from the list. Constant for the session, so it is
+// not worth three rows of the glanceable pane on every cursor move.
+void view_about(const wifi_layout_t *layout);
 
 // Shown before anything is written. Says in as many words that the file holds the
-// passphrase in the clear -- DESIGN.md requires the app to say so rather than let the
+// passphrase in the clear -- the app must say so rather than let the
 // user find out.
 void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename);
 
@@ -157,40 +150,73 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
 // 12 entries plus a six-record expansion plus the furniture, which is 22 of 24 -- and the
 // overtall check in tools/crosscheck.py fails the build if that is ever wrong.
 #define VIEW_PICK_ROWS 12
+
+// Files holding nothing that can land in `dest` are shown and marked, not hidden -- "it exists
+// but not here" is worth saying. Selectability is decided here, not in main.c, so the harness
+// draws the same picker the console does.
+bool view_entry_fits(const backup_entry_t *entry, const wifi_slot_t *dest);
+uint8_t view_entry_count_fitting(const backup_entry_t *entries, uint8_t count,
+                                 const wifi_slot_t *dest);
+
 void view_pick_file(const backup_entry_t *entries, uint8_t count, uint8_t cursor,
-                    uint8_t top);
+                    uint8_t top, const wifi_slot_t *dest);
 
-void view_pick_record(const backup_entry_t *entry, uint8_t cursor);
+// Same rule inside one file: a multi-record file can hold both families, and only the
+// records that fit the destination are selectable.
+bool view_record_fits(const wifi_slot_t *rec, const wifi_slot_t *dest);
+void view_pick_record(const backup_entry_t *entry, uint8_t cursor,
+                      const wifi_slot_t *dest);
 
-// Shown only when the destination is in use, so there is something to lose.
-void view_undo_prompt(const wifi_slot_t *dest);
+// Shown when the card holds backups but none of them can go in this slot.
+void view_none_fit(const wifi_slot_t *dest);
 
-// `undo_name` is NULL if the user declined a safety copy.
+// Deleting a backup is irreversible and the file may be the only copy of a Wi-Fi password,
+// so it is confirmed on its own screen, as a cursor menu with the safe option selected.
+typedef enum {
+    DELETE_KEEP = 0,
+    DELETE_DO_IT,
+    DELETE_CHOICE_COUNT
+} delete_choice_t;
+
+void view_delete_confirm(const backup_entry_t *entry, uint8_t cursor);
+void view_delete_result(bool ok, const char *name, const char *detail);
+
+// Shown only when the destination is in use, so there is something to lose. A cursor menu
+// with the same keys as every other choice in the app: A picks, B backs out.
+typedef enum {
+    UNDO_SAVE_COPY = 0,
+    UNDO_OVERWRITE,
+    UNDO_CHOICE_COUNT
+} undo_choice_t;
+
+void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor);
+
+// The last screen before flash is written, and the only action gated behind more than one press.
+// `seq` is directions the user must enter, then A -- the GodMode9 convention, because a
+// confirmation you can hold A through is not one. `at` is how far through they are.
 //
-// Neither of these takes a no-op flag any more. A restore whose bytes already match the
-// destination is answered before the write flow starts, so a confirm screen saying "this
-// will program nothing" and a result screen saying "nothing was programmed" describe a
-// path the app no longer walks.
+// main.c owns the entropy and only passes the sequence in, so the host harness can draw this
+// screen with a fixed one.
+#define VIEW_COMBO_LEN 4
+
 void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
-                          const char *undo_name);
+                          const char *undo_name, const uint8_t *seq, uint8_t at);
+
+// One character per direction, for the sequence display: the FB_UP/FB_DOWN/FB_LEFT/FB_RIGHT
+// arrow glyphs, and 'A' for the final press. Returns the codepoint, not a legible ASCII
+// stand-in -- tools/host_slotlist.c substitutes "^v><" for a terminal.
+char view_combo_symbol(uint8_t dir);
 
 void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
                          const char *undo_name, const char *detail);
 
 void view_no_backups(void);
 
-// Shown instead of the whole write flow when the destination already holds exactly the
-// record being restored. The write would program nothing, so three screens spent asking
-// for confirmation and then reporting that nothing happened is three screens of "no".
+// Shown instead of the write flow when the destination already holds this exact record: the
+// write would program nothing, so three screens of confirmation to report that is three noes.
 //
-// `allow_force` offers to do it anyway. That is a debug build's affordance, gated on
-// DSIWIFI_DEBUG in main.c rather than on an #ifdef here, so both variants stay renderable
-// by the host harness and the view layer stays free of build configuration.
-//
-// It is worth having in a Dev build precisely because it is the harmless case: libnds
-// compares each page before erasing it, so a matching record programs zero bytes. That
-// makes it the one way to exercise writeFirmware end to end with nothing at risk, which
-// is how the write path was first proven on hardware.
+// `allow_force` offers to do it anyway. main.c gates it on DSIWIFI_DEBUG rather than an #ifdef
+// here, so both variants stay renderable by the host harness.
 void view_noop_notice(const wifi_slot_t *dest, bool allow_force);
 
 #endif // SLOT_LIST_VIEW_H

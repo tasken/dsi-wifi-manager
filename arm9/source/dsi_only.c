@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT
+//
+// From DS-Homebrew/SafeNANDManager, Copyright (c) 2019 zoogie. Unmodified.
+// See licenses/SafeNANDManager-MIT.txt.
+//
+// The rest of this repository is GPL-3.0; this file keeps its own terms, which MIT permits and
+// which GPL-3.0 is compatible with.
+
 #include <nds.h>
 #include "dsiOnly_top.h"
 #include "dsiOnly_bot.h"

@@ -8,15 +8,17 @@ BLOCKSDSEXT	?= /opt/blocksds/external
 # User config
 # ===========
 
-NAME		:= DSiWifiManager
+# Lowercase, matching Cart-Flasher's cart_flasher, because the output name follows its
+# convention below and half a convention is worse than none.
+export TARGET	:= dsi_wifi_manager
 
-GAME_TITLE	:= DSi WiFi Slot Manager
+GAME_TITLE	:= DSi Wi-Fi Manager
 
 # Line 2 says what the app does, including the half that writes. It used to read
 # "milestone 1: read-only", which the DSi System Menu went on showing for three milestones
-# after the app gained the ability to overwrite a WiFi slot. It is the last thing anyone
+# after the app gained the ability to overwrite a Wi-Fi slot. It is the last thing anyone
 # reads before launching this, so it does not get to be out of date.
-GAME_SUBTITLE1 := Back up and restore WiFi slots
+GAME_SUBTITLE1 := Back up and restore connections
 
 # Build provenance
 # ----------------
@@ -27,25 +29,13 @@ GAME_SUBTITLE1 := Back up and restore WiFi slots
 # --dirty is the point of the exercise. This app writes to flash, and hardware testing here
 # happens from working trees with uncommitted changes. "fd40e1d" and "fd40e1d-dirty" are
 # different claims about what is running, and only one of them can be traced back to a
-# commit. Cart-Flasher's version of this, which docs/BUILD_VERSIONING_AND_BANNER.md
-# describes, does not mark it; here it is the reason to bother.
+# commit. Cart-Flasher marks its dev builds by prefix rather than by --dirty; here --dirty is
+# the point, because hardware testing happens from trees with uncommitted changes.
 #
 # Nothing in here is a timestamp. Two builds of one commit must produce the same ROM, or a
 # ROM cannot be compared against a hash, and hash comparison is how this project confirmed
 # its backups were byte-exact in the first place.
 DSIWIFI_COMMIT	?= $(shell git describe --always --dirty --abbrev=7 2>/dev/null || echo nogit)
-
-# The branch reaches the ROM, and this repository is meant to stay safe to publish, so it
-# gets a character whitelist rather than whatever someone happened to name a branch.
-#
-# Sanitised into a second variable rather than in place. A command-line override
-# (make DSIWIFI_BRANCH=...) beats every assignment in the makefile, including a := that
-# tried to clean the value afterwards, so cleaning in place silently does nothing for
-# exactly the case where an unexpected value is most likely to arrive.
-DSIWIFI_BRANCH	?= $(shell B=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
-		     if [ -z "$$B" ]; then echo nogit; else printf '%s' "$$B"; fi)
-DSIWIFI_BRANCH_SAFE := $(subst /,-,$(shell printf '%s' '$(DSIWIFI_BRANCH)' \
-		         | tr -cd 'A-Za-z0-9._/-'))
 
 DSIWIFI_BUILD_KIND ?= Dev
 
@@ -57,19 +47,14 @@ DSIWIFI_BUILD_KIND ?= Dev
 DSIWIFI_DEBUG	?= $(if $(filter Release,$(DSIWIFI_BUILD_KIND)),0,1)
 export DSIWIFI_DEBUG
 
-# What the app prints in its banner row, and what line 3 of the ROM banner says. On main it
-# is just the commit; on a branch the branch is worth knowing too.
-ifeq ($(DSIWIFI_BRANCH_SAFE),main)
+# What the app prints in its banner row, and what line 3 of the ROM banner says.
 DSIWIFI_VERSION	:= $(DSIWIFI_BUILD_KIND) $(DSIWIFI_COMMIT)
-else
-DSIWIFI_VERSION	:= $(DSIWIFI_BUILD_KIND) $(DSIWIFI_BRANCH_SAFE)-$(DSIWIFI_COMMIT)
-endif
 
 GAME_SUBTITLE2	:= $(DSIWIFI_VERSION)
 
 export DSIWIFI_VERSION
 
-# Generated from resources/icon_32x32.png by tools/make_icon.py and checked in, so the
+# Generated from a 32x32 source and checked in, so the
 # build needs nothing but the container. It lives at the root rather than in gfx/, because
 # GFXDIRS makes grit process everything in gfx/ as a sprite sheet.
 #
@@ -102,7 +87,22 @@ ARM7DIR		:= arm7
 # Build artfacts
 # --------------
 
-ROM		:= $(NAME).dsi
+# The output carries its provenance: the build kind and the commit, nothing else.
+#
+#     dsi_wifi_manager-dev-a1b2c3d.dsi        a local build
+#     dsi_wifi_manager-nightly-a1b2c3d.dsi    CI, which overrides DSIWIFI_BUILD_KIND
+#     dsi_wifi_manager.dsi                    a release, which overrides ROM entirely so
+#                                             /releases/latest/download/ stays permanent
+#
+# The branch used to be in here too, following Cart-Flasher. It went: the commit identifies a
+# build on its own, `git log` gives the branch back, and carrying it cost two variables and a
+# character whitelist -- branch names may legally contain shell metacharacters, and this one
+# reached an ndstool recipe.
+#
+# The kind comes from DSIWIFI_BUILD_KIND rather than being spelled again, so "Dev" on the
+# banner and "dev" in the filename cannot disagree.
+DSIWIFI_KIND_TAG := $(shell printf '%s' '$(DSIWIFI_BUILD_KIND)' | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')
+ROM		:= $(TARGET)-$(DSIWIFI_KIND_TAG)-$(DSIWIFI_COMMIT).dsi
 
 # Targets
 # -------
@@ -115,7 +115,7 @@ clean:
 	@echo "  CLEAN"
 	$(V)$(MAKE) -f Makefile.arm9 clean --no-print-directory
 	$(V)$(MAKE) -f Makefile.arm7 clean --no-print-directory
-	$(V)$(RM) $(ROM) build
+	$(V)$(RM) $(ROM) $(TARGET)-*.dsi build
 
 arm9:
 	$(V)+$(MAKE) -f Makefile.arm9 --no-print-directory

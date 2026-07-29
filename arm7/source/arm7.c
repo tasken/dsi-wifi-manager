@@ -1,10 +1,8 @@
-// SPDX-License-Identifier: CC0-1.0
-//
-// Stock ARM7. No custom code is needed to reach the WiFi slots: readFirmware() and
+// Stock ARM7. No custom code is needed to reach the Wi-Fi slots: readFirmware() and
 // writeFirmware() are ARM9-callable wrappers that FIFO to a handler installSystemFIFO()
 // installs here, so this side only has to start the FIFO and stay alive.
 //
-// Unlike ../SafeNANDManager there is no SD/MMC or I2C work here -- the WiFi settings
+// Unlike SafeNANDManager there is no SD/MMC or I2C work here -- the Wi-Fi settings
 // live on the SPI flash chip, not in the NAND.
 
 #include <nds.h>

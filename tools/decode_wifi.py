@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode the six WiFi access-point slots out of a DSi wifi-flash dump.
+"""Decode the six Wi-Fi access-point slots out of a DSi wifi-flash dump.
 
 Usage:
     python3 tools/decode_wifi.py dsfirmware.bin          # full 128 KB dump (dsibiosdumper "X")

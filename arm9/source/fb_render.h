@@ -37,17 +37,22 @@
 // name has an accent in it cannot walk off the end of the glyph table. See fb_render.c.
 #define FB_FALLBACK     '?'
 
+// D-pad arrows at CP437's codepoints. The bitmaps are ours -- Cart-Flasher's come from the
+// Linux kernel's font_6x10.c, GPL-2.0, which cannot enter this MIT repo. See
+// licenses/README.md.
+//
+// Below 0x20 on purpose: FAT long names forbid 0x00-0x1F and wifi_slot_parse() substitutes '?'
+// for any SSID byte outside 0x20-0x7E, so no file name or network name can render as an arrow.
+#define FB_UP           '\x18'
+#define FB_DOWN         '\x19'
+#define FB_RIGHT        '\x1A'
+#define FB_LEFT         '\x1B'
+
 // --- the palette -------------------------------------------------------------------
 //
-// Chosen to survive the DS storing five bits per channel. A colour pair that looks distinct
-// in an RGB888 mock-up can be one step apart on screen: the first draft of this palette had
-// a background and a card two steps apart out of 31, which on a TN panel is one dark blob.
-//
-// ../Cart-Flasher, the one UI here known to read well on a DS screen, uses nothing but
-// extremes: 14 to 31 steps between any two surfaces that touch. The cursor bar below is 22
-// steps from the background and the dim text is 17 from it, which is in that range.
-//
-// See DESIGN.md, "Palette and type". Check any new colour after >> 3, not in a mock-up.
+// The DS stores 5 bits per channel, so two colours that look distinct in an RGB888 mock-up can
+// be one step apart on screen. Adjacent surfaces here are 14-31 steps apart.
+// Check any new colour after >> 3, never in a mock-up. docs/ARCHITECTURE.md, "Rendering".
 #define FB_BG           FB_RGB( 1,  1,  2)
 #define FB_TEXT         FB_RGB(30, 30, 31)
 #define FB_SECONDARY    FB_RGB(18, 19, 23)
@@ -62,11 +67,6 @@ void fb_clear(uint16_t *fb, uint16_t colour);
 // A filled rectangle, clipped to the screen, so a caller whose arithmetic is wrong loses
 // pixels rather than corrupting memory past the buffer. fb_row_text's tail fill uses it.
 void fb_rect(uint16_t *fb, int x, int y, int w, int h, uint16_t colour);
-
-// A one-pixel outline, 2x scaled text, and procedural Wi-Fi and padlock glyphs all lived
-// here while the app was drawing cards. The UI is text only, so they are gone rather than
-// kept warm: DESIGN.md "P-UI (withdrawn)" records what they were and why they went, and
-// git has them if the decision is ever revisited.
 
 // One whole row of text: the string, then the rest of the row painted in `bg`, all the way
 // to FB_WIDTH including the spare pixel column. Painting the tail is the point -- a sink

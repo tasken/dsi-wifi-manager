@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // See wifi_slots.h. Portable C -- no libnds, no I/O.
 
 #include <string.h>

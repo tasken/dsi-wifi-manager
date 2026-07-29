@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // See restore.h.
 
 #include <string.h>

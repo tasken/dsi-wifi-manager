@@ -1,6 +1,4 @@
-// SPDX-License-Identifier: CC0-1.0
-//
-// DSi WiFi Slot Manager: list the six WiFi slots, back one up to the SD card, and restore
+// DSi Wi-Fi Manager: list the six connections, back one up to the SD card, and restore
 // a record from a backup into a slot of the same family.
 //
 // Both screens are drawn as 16-bit bitmaps with fb_render.c putting text into them, which
@@ -94,6 +92,10 @@ static void attr_colours(view_attr_t attr, uint16_t *fg, uint16_t *bg)
         case VIEW_DIM:    *fg = FB_SECONDARY; break;
         case VIEW_GOOD:   *fg = FB_GOOD;      break;
         case VIEW_BAD:    *fg = FB_DANGER;    break;
+        case VIEW_ACCENT: *fg = FB_ACCENT;    break;
+        // Every Dev-only affordance shares this colour, so "this is not in a Release build"
+        // reads without having to parse the words.
+        case VIEW_DEBUG:  *fg = FB_WARN;      break;
         // Drawn as a bar rather than a colour: the row under the cursor should be findable
         // without reading it, and fb_row_text paints the background the full width.
         case VIEW_CURSOR: *fg = FB_BG;        *bg = FB_ACCENT; break;
@@ -156,12 +158,38 @@ static void die(const char *what)
     hang();
 }
 
+// --- entropy ---------------------------------------------------------------------------
+//
+// The confirmation sequence below has to be unguessable, and this console has no random
+// source worth the name. time(NULL) is the obvious choice and a bad one: the RTC may never
+// have been set, and even when it has, a sequence derived from the clock second is the same
+// for everyone who reaches this screen in that second.
+//
+// So the source is human timing. This advances once per frame that the app spends waiting
+// for input, which by the time anyone reaches a write is a number nobody could predict:
+// it is the total of every hesitation in front of every menu on the way here.
+static uint32_t entropy;
+
+static uint32_t entropy_next(void)
+{
+    // xorshift32, so consecutive draws from a slowly-growing counter do not come out
+    // correlated. Not cryptography, and it does not need to be -- it needs to stop a user
+    // learning one sequence by heart.
+    uint32_t x = entropy ? entropy : 0x9E3779B9u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    entropy = x;
+    return x;
+}
+
 // Waits for one of the keys in `mask` and returns it.
 static uint32_t wait_for_key(uint32_t mask)
 {
     while (1)
     {
         swiWaitForVBlank();
+        entropy++;
         scanKeys();
         uint32_t down = keysDown();
         if (down & mask)
@@ -189,8 +217,8 @@ static void message_a(view_attr_t attr, const char *title,
     if (l3)
         msg(VIEW_PLAIN, "%s", l3);
     blank();
-    msg(VIEW_DIM, "B: back");
-    wait_for_key(KEY_B);
+    msg(VIEW_DIM, (attr == VIEW_GOOD) ? "A  OK" : "B  back");
+    wait_for_key(KEY_A | KEY_B);
 }
 
 // The common case: something was refused or went wrong, so the title is loud.
@@ -442,26 +470,37 @@ static void scan_backups(void)
 
 static void draw_list(uint8_t cursor)
 {
-    // The top pane follows the cursor. It is the app's detail view: the list row cuts the
-    // SSID to about 20 columns and this is where the whole one is legible.
+    // Redrawn on every return from enter_conn(), which is safe because do_restore() re-parses
+    // its destination into slots[] before returning -- so a row and the pane show what the flash
+    // holds, not what was read at startup.
     clear_top();
-    view_detail(&layout, &slots[cursor]);
+    view_summary(&layout, &slots[cursor], layout.count);
 
     clear_bottom();
     view_list_title();
     for (uint8_t i = 0; i < layout.count; i++)
-        view_slot(&slots[i], i == cursor);
-    view_keys();
+        view_conn_row(&slots[i], i == cursor);
+    view_keys(DSIWIFI_DEBUG != 0);
 }
 
 // Runs a cursor over `n` items, redrawing through `draw`. Returns the chosen index, or
 // -1 if the user backed out.
 typedef void (*draw_fn)(uint8_t cursor, void *ctx);
 
-static int choose(uint8_t n, draw_fn draw, void *ctx)
+// Runs a cursor over `n` items, redrawing through `draw`. Returns the chosen index, or
+// CHOOSE_BACK if the user backed out.
+//
+// `extra` is an optional second action key. When it is pressed this returns CHOOSE_EXTRA and
+// leaves the cursor position in *at, so a caller can offer something besides "pick this one"
+// -- deleting a backup from the file picker, for instance -- without a parallel input loop
+// that would drift from this one.
+#define CHOOSE_BACK   (-1)
+#define CHOOSE_EXTRA  (-2)
+
+static int choose_with(uint8_t n, draw_fn draw, void *ctx, uint32_t extra, uint8_t *at)
 {
     if (n == 0)
-        return -1;
+        return CHOOSE_BACK;
 
     uint8_t cursor = 0;
     draw(cursor, ctx);
@@ -469,13 +508,20 @@ static int choose(uint8_t n, draw_fn draw, void *ctx)
     while (1)
     {
         swiWaitForVBlank();
+        entropy++;
         scanKeys();
         uint32_t down = keysDown();
 
         if (down & KEY_B)
-            return -1;
+            return CHOOSE_BACK;
         if (down & KEY_A)
             return cursor;
+        if (extra && (down & extra))
+        {
+            if (at != NULL)
+                *at = cursor;
+            return CHOOSE_EXTRA;
+        }
 
         if (down & KEY_UP)
         {
@@ -490,8 +536,13 @@ static int choose(uint8_t n, draw_fn draw, void *ctx)
     }
 }
 
-// The restore flow is five screens deep, and each one replaces the last. This is what
-// the top pane holds on to across all of them, filled in as the user descends.
+static int choose(uint8_t n, draw_fn draw, void *ctx)
+{
+    return choose_with(n, draw, ctx, 0, NULL);
+}
+
+// The restore flow is several screens deep and each one replaces the last. This is what the
+// top pane holds on to across all of them, filled in as the user descends.
 static view_restore_ctx_t restore_ctx;
 
 static void draw_restore_top(void)
@@ -500,16 +551,34 @@ static void draw_restore_top(void)
     view_restore_context(&restore_ctx);
 }
 
+// Index into entries[] of the n'th backup that can go in this connection, or -1. The cursor
+// counts only the ones that fit, because the picker only draws those.
+static int nth_fitting(const wifi_slot_t *dest, uint8_t n)
+{
+    uint8_t seen = 0;
+    for (uint8_t i = 0; i < entry_count; i++)
+    {
+        if (!view_entry_fits(&entries[i], dest))
+            continue;
+        if (seen == n)
+            return (int)i;
+        seen++;
+    }
+    return -1;
+}
+
 static void draw_file_pick(uint8_t cursor, void *ctx)
 {
-    (void)ctx;
+    const wifi_slot_t *dest = (const wifi_slot_t *)ctx;
+    int idx = nth_fitting(dest, cursor);
+    if (idx < 0)
+        return;
 
-    // The pane tracks the cursor here too: the file under it is the one being described,
+    // The pane tracks the cursor here too: the backup under it is the one being described,
     // and it stays described once it has been picked.
-    restore_ctx.file = entries[cursor].name;
-    restore_ctx.dir = entries[cursor].dir;
-    restore_ctx.source = (entries[cursor].ok && entries[cursor].count == 1)
-                       ? &entries[cursor].rec[0] : NULL;
+    restore_ctx.file = entries[idx].name;
+    restore_ctx.dir = entries[idx].dir;
+    restore_ctx.source = (entries[idx].count == 1) ? &entries[idx].rec[0] : NULL;
     draw_restore_top();
 
     clear_bottom();
@@ -519,18 +588,48 @@ static void draw_file_pick(uint8_t cursor, void *ctx)
     if (cursor >= VIEW_PICK_ROWS)
         top = (uint8_t)(cursor - VIEW_PICK_ROWS + 1);
 
-    view_pick_file(entries, entry_count, cursor, top);
+    view_pick_file(entries, entry_count, cursor, top, dest);
+}
+
+static void draw_undo_prompt(uint8_t cursor, void *ctx)
+{
+    draw_restore_top();
+    clear_bottom();
+    view_undo_prompt((const wifi_slot_t *)ctx, cursor);
+}
+
+// Same shape for the records inside one file: a multi-record file can hold both families.
+struct record_ctx {
+    const backup_entry_t *entry;
+    const wifi_slot_t *dest;
+};
+
+static int nth_fitting_record(const struct record_ctx *rc, uint8_t n)
+{
+    uint8_t seen = 0;
+    for (uint8_t i = 0; i < rc->entry->count; i++)
+    {
+        if (!view_record_fits(&rc->entry->rec[i], rc->dest))
+            continue;
+        if (seen == n)
+            return (int)i;
+        seen++;
+    }
+    return -1;
 }
 
 static void draw_record_pick(uint8_t cursor, void *ctx)
 {
-    const backup_entry_t *e = (const backup_entry_t *)ctx;
+    const struct record_ctx *rc = (const struct record_ctx *)ctx;
+    int idx = nth_fitting_record(rc, cursor);
+    if (idx < 0)
+        return;
 
-    restore_ctx.source = &e->rec[cursor];
+    restore_ctx.source = &rc->entry->rec[idx];
     draw_restore_top();
 
     clear_bottom();
-    view_pick_record(e, cursor);
+    view_pick_record(rc->entry, (uint8_t)idx, rc->dest);
 }
 
 // --- restore ---------------------------------------------------------------------------
@@ -538,6 +637,93 @@ static void draw_record_pick(uint8_t cursor, void *ctx)
 // Save the destination slot's current bytes before anything overwrites them. Returns
 // false and leaves *detail set if it could not, in which case the restore is abandoned:
 // the user asked for a copy, so proceeding without one is not what they agreed to.
+// Delete the highlighted backup, confirmed on its own screen with the safe option selected.
+// Rescans afterwards, because entries[] is built from the card and is stale the moment a file
+// goes. The connection the file came from is untouched; only the file is removed.
+static void draw_delete_confirm(uint8_t cursor, void *ctx)
+{
+    clear_bottom();
+    view_delete_confirm((const backup_entry_t *)ctx, cursor);
+}
+
+static void delete_backup(uint8_t index)
+{
+    backup_entry_t *e = &entries[index];
+
+    int pick = choose(DELETE_CHOICE_COUNT, draw_delete_confirm, e);
+    if (pick != DELETE_DO_IT)
+        return;
+
+    char path[BACKUP_PATH_LEN];
+    backup_path_join(e->dir, e->name, path, sizeof(path));
+
+    // Keep the name: `e` points into entries[], which the rescan below rebuilds.
+    char name[BACKUP_NAME_LEN];
+    snprintf(name, sizeof(name), "%s", e->name);
+
+    bool ok = (unlink(path) == 0);
+
+    clear_bottom();
+    view_delete_result(ok, name, ok ? NULL : "the SD card refused the delete");
+    wait_for_key(KEY_A | KEY_B);
+
+    scan_backups();
+}
+
+// The gate in front of the one action that changes somebody's console.
+//
+// A confirmation you can hold A through is not a confirmation. This asks for a sequence the
+// user has to read off the screen: four directions, then A. It is the convention GodMode9
+// established and Cart-Flasher follows before flashing a cart, and it is here for the same
+// reason -- the cost of an accidental press is somebody's Wi-Fi settings.
+//
+// A wrong press abandons the whole thing rather than rewinding one step. Rewinding turns it
+// into a puzzle to be solved by trial; abandoning keeps it a thing you do deliberately or not
+// at all.
+static bool confirm_write(const wifi_slot_t *source, const wifi_slot_t *dest,
+                          const char *undo)
+{
+    uint8_t seq[VIEW_COMBO_LEN];
+
+    // No direction repeats back-to-back: two identical symbols side by side read as one, and
+    // the sequence is entered from what is on screen.
+    uint8_t last = 0xFF;
+    for (uint8_t i = 0; i < VIEW_COMBO_LEN; i++)
+    {
+        uint8_t d;
+        do { d = (uint8_t)(entropy_next() & 3); } while (d == last);
+        seq[i] = d;
+        last = d;
+    }
+
+    static const uint32_t dir_key[4] = { KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT };
+
+    for (uint8_t at = 0; ; at++)
+    {
+        clear_bottom();
+        view_restore_confirm(source, dest, undo, seq, at);
+
+        // Everything that could be pressed, so a wrong press is seen and acted on rather
+        // than ignored until the right one arrives.
+        uint32_t want = (at < VIEW_COMBO_LEN) ? dir_key[seq[at] & 3] : KEY_A;
+        uint32_t got = wait_for_key(KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT |
+                                   KEY_A | KEY_B | KEY_X | KEY_Y);
+
+        if (got & KEY_B)
+            return false;
+
+        if (!(got & want))
+        {
+            message("Cancelled.", "That was not the next button in the",
+                    "sequence, so nothing was written.", NULL);
+            return false;
+        }
+
+        if (at >= VIEW_COMBO_LEN)
+            return true;
+    }
+}
+
 static bool write_undo(uint8_t dest_index, char *name_out, size_t name_len,
                        const char **detail)
 {
@@ -564,16 +750,15 @@ static bool write_undo(uint8_t dest_index, char *name_out, size_t name_len,
 // The destination is decided before this runs: the user entered that slot and chose
 // "restore into it". So there is no destination step, and the family it accepts is known
 // while the file picker is still being drawn.
-static void do_restore(uint8_t dest_index)
+static bool do_restore(uint8_t dest_index)
 {
     memset(&restore_ctx, 0, sizeof(restore_ctx));
     restore_ctx.dest = &slots[dest_index];
 
     if (!have_sd)
     {
-        message("No SD card.", "The card did not mount, so",
-                "there is nothing to read.", NULL);
-        return;
+        message("No SD card.", "Put a card in and try again.", NULL, NULL);
+        return false;
     }
 
     clear_top();
@@ -581,41 +766,89 @@ static void do_restore(uint8_t dest_index)
 
     clear_bottom();
     blank();
-    msg(VIEW_PLAIN, "Scanning DSIWIFI/ ...");
+    msg(VIEW_PLAIN, "Looking for backups ...");
     scan_backups();
 
     if (entry_count == 0)
     {
         clear_bottom();
         view_no_backups();
-        blank();
-        msg(VIEW_DIM, "B: back");
-        wait_for_key(KEY_B);
-        return;
+        wait_for_key(KEY_A | KEY_B);
+        return false;
     }
 
-    int fi = choose(entry_count, draw_file_pick, NULL);
-    if (fi < 0)
-        return;
+    // Only offer what can actually land here. The destination was chosen before this flow
+    // started, so the family it accepts is known while the picker is still being drawn --
+    // which is the point of entering a slot first. The old flow could only refuse after the
+    // user had picked, which is a worse thing to do than not offering it.
+    const wifi_slot_t *dest = &slots[dest_index];
+    int fi = -1;
+
+    // Loops because X deletes the highlighted backup, after which the card has changed and
+    // the list has to be rescanned and redrawn. Picking with A leaves the loop.
+    while (1)
+    {
+        uint8_t fitting = view_entry_count_fitting(entries, entry_count, dest);
+
+        if (fitting == 0)
+        {
+            draw_restore_top();
+            clear_bottom();
+
+            // Two situations with two different answers: nothing on the card at all, or
+            // things on the card that cannot go in this connection.
+            if (entry_count == 0)
+                view_no_backups();
+            else
+                view_none_fit(dest);
+
+            wait_for_key(KEY_A | KEY_B);
+            return false;
+        }
+
+        uint8_t at = 0;
+        int pick = choose_with(fitting, draw_file_pick, (void *)dest, KEY_X, &at);
+        if (pick == CHOOSE_BACK)
+            return false;
+
+        if (pick == CHOOSE_EXTRA)
+        {
+            int di = nth_fitting(dest, at);
+            if (di >= 0)
+                delete_backup((uint8_t)di);
+            continue;
+        }
+
+        fi = nth_fitting(dest, (uint8_t)pick);
+        if (fi < 0)
+            return false;
+        break;
+    }
 
     backup_entry_t *e = &entries[fi];
-    if (!e->ok)
+
+    // The app writes one record per file, so normally there is nothing to pick. The screen
+    // is still here for the multi-record files earlier versions wrote, and for any made by
+    // hand -- backup_parse still reads them. Only the records that fit are choosable, so a
+    // mixed-family file offers just its usable half.
+    struct record_ctx rc = { .entry = e, .dest = dest };
+    uint8_t fitting_recs = 0;
+    for (uint8_t i = 0; i < e->count; i++)
     {
-        message("That file cannot be read.",
-                e->problem ? e->problem : "bad file", NULL, NULL);
-        return;
+        if (view_record_fits(&e->rec[i], dest))
+            fitting_recs++;
     }
 
-    // The app writes one record per file, so normally there is nothing to pick. The
-    // screen is still here for the multi-record files earlier versions wrote, and for
-    // any made by hand -- backup_parse still reads them.
-    int ri = 0;
-    if (e->count > 1)
+    int ri = nth_fitting_record(&rc, 0);
+    if (fitting_recs > 1)
     {
-        ri = choose(e->count, draw_record_pick, e);
-        if (ri < 0)
-            return;
+        int rc_choice = choose(fitting_recs, draw_record_pick, &rc);
+        if (rc_choice < 0)
+            return false;
+        ri = nth_fitting_record(&rc, (uint8_t)rc_choice);
     }
+    if (ri < 0)
+        return false;
 
     const wifi_slot_t *source = &e->rec[ri];
 
@@ -624,21 +857,6 @@ static void do_restore(uint8_t dest_index)
     restore_ctx.file = e->name;
     restore_ctx.dir = e->dir;
     restore_ctx.source = source;
-
-    // A 0x100 record has no room for a WPA passphrase or its PSK. The destination is fixed
-    // now, so a record of the wrong family is refused here rather than being offered a slot
-    // list it cannot use. restore_check() still has the final say either way.
-    if (source->family != slots[dest_index].family)
-    {
-        message("That backup does not fit here.",
-                (source->family == WIFI_FAMILY_TWL)
-                    ? "It holds a WPA network, which needs"
-                    : "It holds a DS-era record, which needs",
-                (source->family == WIFI_FAMILY_TWL)
-                    ? "slots 4-6. This is slot 1-3."
-                    : "slots 1-3. This is slot 4-6.", NULL);
-        return;
-    }
 
     draw_restore_top();
 
@@ -651,7 +869,7 @@ static void do_restore(uint8_t dest_index)
     if (f == NULL)
     {
         message("Cannot reopen that file.", path, NULL, NULL);
-        return;
+        return false;
     }
     size_t got = fread(scan_buffer, 1, sizeof(scan_buffer), f);
     fclose(f);
@@ -663,7 +881,7 @@ static void do_restore(uint8_t dest_index)
     {
         message("That file changed.", "It no longer parses the way",
                 "it did a moment ago.", NULL);
-        return;
+        return false;
     }
 
     const backup_record_t *rec = &recs[ri];
@@ -675,7 +893,7 @@ static void do_restore(uint8_t dest_index)
     {
         message("Refusing to write.", restore_strerror(rerr),
                 "Nothing was written.", NULL);
-        return;
+        return false;
     }
 
     bool noop = restore_is_noop(rec, records[dest_index]);
@@ -688,11 +906,8 @@ static void do_restore(uint8_t dest_index)
     // an undo prompt, a confirmation and a result screen only to report that nothing
     // happened is three screens spent saying "no".
     //
-    // Note for anyone reading the project history: restoring a slot onto itself used to be
-    // the recommended first hardware test of the write path, precisely because it programs
-    // zero bytes. That test is no longer reachable from the UI, and it has done its job --
-    // it passed on the reference DSi and in melonDS. Exercising writeFirmware now means
-    // restoring into a slot that does not already match.
+    // libnds compares each page before erasing, so a matching record programs zero bytes.
+    // Answered here rather than three screens later.
     if (noop)
     {
         draw_restore_top();
@@ -704,7 +919,7 @@ static void do_restore(uint8_t dest_index)
         // end to end with nothing at risk. A Release build is not offered it.
         uint32_t answer = wait_for_key(DSIWIFI_DEBUG ? (KEY_X | KEY_B) : KEY_B);
         if (!(answer & KEY_X))
-            return;
+            return false;
     }
 
     // Only offer the safety copy when there is something to lose: not for a free
@@ -719,25 +934,22 @@ static void do_restore(uint8_t dest_index)
         // still on screen above it.
         draw_restore_top();
 
-        clear_bottom();
-        view_undo_prompt(&slots[dest_index]);
+        int pick = choose(UNDO_CHOICE_COUNT, draw_undo_prompt, &slots[dest_index]);
+        if (pick < 0)
+            return false;
 
-        uint32_t answer = wait_for_key(KEY_A | KEY_X | KEY_B);
-        if (answer & KEY_B)
-            return;
-
-        if (answer & KEY_A)
+        if (pick == UNDO_SAVE_COPY)
         {
             clear_bottom();
             blank();
-            msg(VIEW_PLAIN, "Saving a copy of slot %u ...", slots[dest_index].number);
+            msg(VIEW_PLAIN, "Saving a copy of Connection %u ...", slots[dest_index].number);
 
             const char *detail = NULL;
             if (!write_undo((uint8_t)dest_index, undo_name, sizeof(undo_name), &detail))
             {
                 message("Could not save the copy.", detail,
                         "Nothing was written to flash.", NULL);
-                return;
+                return false;
             }
             undo = undo_name;
         }
@@ -747,14 +959,12 @@ static void do_restore(uint8_t dest_index)
     restore_ctx.undo_settled = true;
     draw_restore_top();
 
-    clear_bottom();
-    view_restore_confirm(source, &slots[dest_index], undo);
-    if (!(wait_for_key(KEY_A | KEY_B) & KEY_A))
-        return;
+    if (!confirm_write(source, &slots[dest_index], undo))
+        return false;
 
     clear_bottom();
     blank();
-    msg(VIEW_BAD, "Writing slot %u ...", slots[dest_index].number);
+    msg(VIEW_BAD, "Saving to Connection %u ...", slots[dest_index].number);
 
     // writeFirmware needs the source in main RAM and takes a non-const pointer.
     memcpy(write_buffer, rec->data, rec->length);
@@ -771,7 +981,7 @@ static void do_restore(uint8_t dest_index)
     if (readFirmware(dest_pos->offset, records[dest_index], dest_pos->length) != 0)
     {
         ok = false;
-        detail = "cannot read the slot back";
+        detail = "cannot read the connection back";
     }
     else
     {
@@ -781,7 +991,7 @@ static void do_restore(uint8_t dest_index)
         if (ok && memcmp(records[dest_index], rec->data, rec->length) != 0)
         {
             ok = false;
-            detail = "the slot does not hold what was written";
+            detail = "the connection does not hold what was written";
         }
     }
 
@@ -789,34 +999,37 @@ static void do_restore(uint8_t dest_index)
     // holds rather than what was asked for.
     clear_top();
     if (now != NULL)
-        view_detail(&layout, now);
+        view_summary(&layout, now, layout.count);
     else
         view_idle_context(&layout);
 
     clear_bottom();
     view_restore_result(ok, slots[dest_index].number, now, undo, detail);
-    wait_for_key(KEY_B);
+    wait_for_key(KEY_A | KEY_B);
+
+    // Reached the result screen, so something was attempted and the user has seen how
+    // it went. enter_conn() takes that as the cue to drop back to the list.
+    return true;
 }
 
 // --- main -------------------------------------------------------------------------------
 
-static void do_backup(uint8_t index)
+static bool do_backup(uint8_t index)
 {
-    // No free-slot guard here any more. view_slot_action_count() does not offer backup on a
+    // No free-slot guard here any more. view_conn_action_count() does not offer backup on a
     // free slot, so this is unreachable for one -- and restore_check()/backup_build still
     // refuse such a record if anything else ever calls in.
     if (!have_sd)
     {
-        message("No SD card.", "The card did not mount, so",
-                "there is nowhere to write.", NULL);
-        return;
+        message("No SD card.", "Put a card in and try again.", NULL, NULL);
+        return false;
     }
 
     if (!pick_name(backup_dir, 0))
     {
         message("No free file name.", "Every name this app can use",
                 "is taken. Move some off the", "card first.");
-        return;
+        return false;
     }
 
     clear_top();
@@ -825,59 +1038,64 @@ static void do_backup(uint8_t index)
     clear_bottom();
     view_confirm(&slots[index], backup_dir, backup_name);
     if (!(wait_for_key(KEY_A | KEY_B) & KEY_A))
-        return;
+        return false;
 
     const char *detail = NULL;
     uint32_t bytes = write_backup(index, &detail);
 
     clear_bottom();
     view_result(bytes != 0, backup_dir, backup_name, bytes, 1, detail);
-    wait_for_key(KEY_B);
+    wait_for_key(KEY_A | KEY_B);
+
+    return true;
 }
 
 // --- the slot screen -------------------------------------------------------------------
 
-static void draw_slot_screen(uint8_t cursor, void *ctx)
+static void draw_conn_screen(uint8_t cursor, void *ctx)
 {
     const wifi_slot_t *s = (const wifi_slot_t *)ctx;
 
     clear_top();
-    view_detail(&layout, s);
+    view_summary(&layout, s, layout.count);
 
     clear_bottom();
-    view_slot_screen(s, cursor);
+    view_conn_screen(s, cursor);
 }
 
 // One slot, its details and what can be done to it. Returns when the user backs out.
-static void enter_slot(uint8_t index)
+static void enter_conn(uint8_t index)
 {
-    // Loops rather than returning: after an action the user lands back on this slot's
-    // screen, not on the list. A restore that just wrote is most likely to be followed by
-    // looking at what landed, and the top pane has re-read the slot by then.
-    //
-    // The action cursor starts at the top each time. Remembering the last pick was tried
-    // and removed: choose() has no way to take a starting position, and adding one to carry
-    // a preference nobody asked for is not worth the parameter.
+    // A finished backup or restore returns to the list; anything short of finishing stays here.
+    // That is what do_backup()/do_restore() report: true once the user has seen a result screen,
+    // false for no card, no free name, a refused write, or B at the confirm. Cancelling must not
+    // eject the user, because B means "up one level" everywhere else.
     while (1)
     {
-        uint8_t n = view_slot_action_count(&slots[index]);
-        int pick = choose(n, draw_slot_screen, &slots[index]);
+        uint8_t n = view_conn_action_count(&slots[index]);
+        int pick = choose(n, draw_conn_screen, &slots[index]);
         if (pick < 0)
             return;
 
-        switch (view_slot_action_at(&slots[index], (uint8_t)pick))
+        bool finished = false;
+        switch (view_conn_action_at(&slots[index], (uint8_t)pick))
         {
-            case SLOT_ACTION_BACKUP:  do_backup(index); break;
-            case SLOT_ACTION_RESTORE: do_restore(index); break;
+            case CONN_ACTION_BACKUP:  finished = do_backup(index); break;
+            case CONN_ACTION_RESTORE: finished = do_restore(index); break;
             default: break;
         }
+
+        if (finished)
+            return;
     }
 }
 
 int main(void)
 {
-    // Shows the "DSi only" screen and never returns if this is a DS, or a DSi booted
-    // in DS mode -- where slots 4-6 do not exist and the flash reads differently.
+    // Shows the "DSi only" screen and never returns on a DS, or a DSi booted in DS mode from
+    // a flashcart. Mostly belt and braces: the ROM header's unitcode is 0x02, so a DS will not
+    // boot this far. Why the gate stays (SD via DLDI, untested write-protect behaviour) is in
+    // docs/ARCHITECTURE.md, "Platform".
     extern void dsiOnly(void);
     dsiOnly();
 
@@ -927,7 +1145,7 @@ int main(void)
         if (readFirmware(pos->offset, records[i], pos->length) != 0)
         {
             blank();
-            msg(VIEW_BAD, "Could not read slot %u at 0x%05lX.",
+            msg(VIEW_BAD, "Could not read Connection %u at 0x%05lX.",
                 pos->number, (unsigned long)pos->offset);
             die("Aborting.");
         }
@@ -964,7 +1182,14 @@ int main(void)
         }
         else if (down & KEY_A)
         {
-            enter_slot(cursor);
+            enter_conn(cursor);
+            draw_list(cursor);
+        }
+        else if (DSIWIFI_DEBUG && (down & KEY_SELECT))
+        {
+            clear_bottom();
+            view_about(&layout);
+            wait_for_key(KEY_A | KEY_B);
             draw_list(cursor);
         }
     }

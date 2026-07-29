@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: CC0-1.0
-//
 // Host build of the console's decoder, screens, backup writer and restore logic, so
 // milestones can be checked without hardware. It compiles arm9/source/wifi_slots.c,
 // slot_list_view.c, backup_file.c and restore.c unmodified -- the same objects the ARM9
@@ -82,7 +80,9 @@ static char attr_tag(view_attr_t a)
         case VIEW_DIM:    return 'd';
         case VIEW_GOOD:   return 'g';
         case VIEW_BAD:    return 'B';
+        case VIEW_ACCENT: return '*';
         case VIEW_CURSOR: return '>';
+        case VIEW_DEBUG:  return 'D';
         default:          return ' ';
     }
 }
@@ -98,6 +98,22 @@ static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line)
     size_t n = strlen(line);
 
     pane_rows[pane]++;
+
+    // The arrow glyphs are CP437's codepoints 0x18-0x1B, which a terminal would eat. They are
+    // substituted for display only: one byte in still means one glyph out, so the width count
+    // below measures exactly what the console draws.
+    //
+    // The order is CP437's -- up, down, RIGHT, left -- not the reading order of "^v<>". That
+    // transposition is easy to make and silent, because both strings are four characters and
+    // the widths still pass; only a screen showing the wrong direction reveals it.
+    static char shown[256];
+    for (size_t i = 0; i <= n && i < sizeof(shown) - 1; i++)
+    {
+        unsigned char c = (unsigned char)line[i];
+        shown[i] = (c >= FB_UP && c <= FB_LEFT) ? "^v><"[c - FB_UP] : line[i];
+    }
+    shown[sizeof(shown) - 1] = '\0';
+    line = shown;
 
     printf("%s%c|%.*s%s\n", (pane == VIEW_TOP) ? "T" : "B", attr_tag(attr), VIEW_COLS, line,
            (n > (size_t)VIEW_COLS) ? "   <-- OVERLONG, CUT ON THE CONSOLE" : "");
@@ -200,11 +216,11 @@ static void print_list(const wifi_layout_t *layout, const wifi_slot_t *slots,
                        uint8_t cursor)
 {
     ruler();
-    view_detail(layout, &slots[cursor]);
+    view_summary(layout, &slots[cursor], layout->count);
     view_list_title();
     for (uint8_t i = 0; i < layout->count; i++)
-        view_slot(&slots[i], i == cursor);
-    view_keys();
+        view_conn_row(&slots[i], i == cursor);
+    view_keys(true);   // draw the Dev-build hints too, so widths cover them
     ruler();
 }
 
@@ -249,21 +265,26 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
 
     // The slot screen, which is what A now opens: both actions on a slot in use, restore
     // alone on a free one.
+    printf("\n--- about screen (SELECT from the list) ---\n");
+    ruler();
+    view_about(layout);
+    ruler();
+
     printf("\n--- slot screen, slot in use, cursor on Back up ---\n");
     ruler();
-    view_slot_screen(&slots[first_used], 0);
+    view_conn_screen(&slots[first_used], 0);
     ruler();
 
     printf("\n--- slot screen, slot in use, cursor on Restore ---\n");
     ruler();
-    view_slot_screen(&slots[first_used], 1);
+    view_conn_screen(&slots[first_used], 1);
     ruler();
 
     if (any_free)
     {
         printf("\n--- slot screen, free slot: restore is the only option ---\n");
         ruler();
-        view_slot_screen(&slots[first_free], 0);
+        view_conn_screen(&slots[first_free], 0);
         ruler();
     }
 
@@ -320,15 +341,28 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
     picked[2].ok = false;
     picked[2].problem = "junk after the last record";
 
-    printf("\n--- restore: pick a file ---\n");
+    // The pickers now take the destination and draw only what can land in it, so both
+    // families get rendered: an NTR slot sees the NTR backups, a TWL slot sees the TWL ones.
+    const wifi_slot_t *ntr_dest = &slots[0];
+    const wifi_slot_t *twl_dest = NULL;
+    for (uint8_t i = 0; i < layout->count; i++)
+        if (slots[i].family == WIFI_FAMILY_TWL) { twl_dest = &slots[i]; break; }
+
+    printf("\n--- restore into an NTR slot: only NTR backups are offered ---\n");
     ruler();
-    view_pick_file(picked, 3, 0, 0);
+    view_pick_file(picked, 3, 0, 0, ntr_dest);
     ruler();
 
-    printf("\n--- restore: unreadable file under the cursor ---\n");
-    ruler();
-    view_pick_file(picked, 3, 2, 0);
-    ruler();
+    if (twl_dest != NULL)
+    {
+        printf("\n--- restore into a TWL slot: the NTR backups are simply absent ---\n");
+        ruler();
+        if (view_entry_count_fitting(picked, 3, twl_dest) == 0)
+            view_none_fit(twl_dest);
+        else
+            view_pick_file(picked, 3, 0, 0, twl_dest);
+        ruler();
+    }
 
     printf("\n--- restore: no backups at all ---\n");
     ruler();
@@ -342,7 +376,7 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
 
     printf("\n--- restore: pick a record ---\n");
     ruler();
-    view_pick_record(&picked[0], 0);
+    view_pick_record(&picked[0], 0, ntr_dest);
     ruler();
 
     // Both variants of the no-op notice: a Release build only offers B, a Dev build also
@@ -358,9 +392,33 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
     view_noop_notice(&slots[0], true);
     ruler();
 
+    // Deleting a backup, both cursor positions, so the widths and rows checks cover the
+    // screen with the destructive option selected as well as the safe one.
+    printf("\n--- delete a backup: safe option selected ---\n");
+    ruler();
+    view_delete_confirm(&picked[0], DELETE_KEEP);
+    ruler();
+
+    printf("\n--- delete a backup: the destructive option selected ---\n");
+    ruler();
+    view_delete_confirm(&picked[0], DELETE_DO_IT);
+    ruler();
+
+    printf("\n--- delete: done, and refused ---\n");
+    ruler();
+    view_delete_result(true, picked[0].name, NULL);
+    ruler();
+    view_delete_result(false, picked[0].name, "the SD card refused the delete");
+    ruler();
+
     printf("\n--- restore: destination in use, offer a copy ---\n");
     ruler();
-    view_undo_prompt(&slots[0]);
+    view_undo_prompt(&slots[0], UNDO_SAVE_COPY);
+    ruler();
+
+    printf("\n--- restore: the same prompt with the overwrite option selected ---\n");
+    ruler();
+    view_undo_prompt(&slots[0], UNDO_OVERWRITE);
     ruler();
 
     // The three reachable combinations. A no-op never carries an undo copy: the app
@@ -368,12 +426,25 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
 
     printf("\n--- restore: confirm, overwriting, copy kept ---\n");
     ruler();
-    view_restore_confirm(source, &slots[0], "undo1-20260728-015530.dswifi");
+    // A fixed sequence, so the screen renders identically every run and the width and height
+    // checks are comparing the same thing. main.c generates a real one from its entropy.
+    static const uint8_t combo[VIEW_COMBO_LEN] = { 0, 2, 1, 3 };
+    view_restore_confirm(source, &slots[0], "undo1-20260728-015530.dswifi", combo, 0);
     ruler();
 
     printf("\n--- restore: confirm, overwriting, no copy kept ---\n");
     ruler();
-    view_restore_confirm(source, &slots[0], NULL);
+    view_restore_confirm(source, &slots[0], NULL, combo, 0);
+    ruler();
+
+    printf("\n--- restore: confirm, two of the four entered ---\n");
+    ruler();
+    view_restore_confirm(source, &slots[0], NULL, combo, 2);
+    ruler();
+
+    printf("\n--- restore: confirm, waiting on the final A ---\n");
+    ruler();
+    view_restore_confirm(source, &slots[0], NULL, combo, VIEW_COMBO_LEN);
     ruler();
 
     printf("\n--- restore: done ---\n");
@@ -696,9 +767,64 @@ static int render_checks(void)
              "byte 0xC3 draws the fallback glyph");
 
     fb_clear(fb, FB_BG);
-    fb_text(fb, 0, 0, FB_TEXT, FB_BG, "\x01");
+    fb_text(fb, 0, 0, FB_TEXT, FB_BG, "\x05");
     fb_check(memcmp(fb, ref, FB_PIXELS * sizeof(uint16_t)) == 0,
-             "byte 0x01 draws the fallback glyph");
+             "byte 0x05 draws the fallback glyph");
+
+    fb_clear(fb, FB_BG);
+    fb_text(fb, 0, 0, FB_TEXT, FB_BG, "\x7F");
+    fb_check(memcmp(fb, ref, FB_PIXELS * sizeof(uint16_t)) == 0,
+             "byte 0x7F draws the fallback glyph");
+
+    // 0x18-0x1B are the arrows, so they must NOT be the fallback, and each must differ from
+    // the others -- four identical triangles would make the confirmation sequence unreadable
+    // while still passing every other check here.
+    bool arrows_distinct = true, arrows_not_fallback = true;
+    static uint16_t arrow[4][FB_PIXELS];
+    int ink_w[4] = { 0 }, ink_h[4] = { 0 };
+    for (int a = 0; a < 4; a++)
+    {
+        fb_clear(arrow[a], FB_BG);
+        char one[2] = { (char)(FB_UP + a), '\0' };
+        fb_text(arrow[a], 0, 0, FB_TEXT, FB_BG, one);
+        if (memcmp(arrow[a], ref, FB_PIXELS * sizeof(uint16_t)) == 0)
+            arrows_not_fallback = false;
+
+        // The ink's bounding box inside the glyph cell, measured off the pixels rather than
+        // read back out of the table, so this tests what gets drawn.
+        int x0 = FONT_GLYPH_W, x1 = -1, y0 = FONT_GLYPH_H, y1 = -1;
+        for (int y = 0; y < FONT_GLYPH_H; y++)
+            for (int x = 0; x < FONT_GLYPH_W; x++)
+                if (arrow[a][y * FB_WIDTH + x] == FB_TEXT)
+                {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+        ink_w[a] = x1 - x0 + 1;
+        ink_h[a] = y1 - y0 + 1;
+    }
+    for (int a = 0; a < 4; a++)
+        for (int b = a + 1; b < 4; b++)
+            if (memcmp(arrow[a], arrow[b], FB_PIXELS * sizeof(uint16_t)) == 0)
+                arrows_distinct = false;
+
+    fb_check(arrows_not_fallback, "bytes 0x18-0x1B draw arrows, not the fallback");
+    fb_check(arrows_distinct, "the four arrows are all different from each other");
+
+    // Distinct is not the same as legible. Four glyphs can differ by a pixel and still read as
+    // one symbol at 5x8, which is what the first version did: every arrow was a triangle with
+    // a shaft, so every one had a full-width middle row and they came out as four variations
+    // on a plus sign.
+    //
+    // What separates them now is orientation, so that is what is asserted: an up or down arrow
+    // is taller than it is wide, a left or right arrow wider than tall. Widening a head back
+    // to the full 5 columns squares the vertical pair's bounding box and fails here.
+    fb_check(ink_h[0] > ink_w[0] && ink_h[1] > ink_w[1],
+             "up and down are taller than they are wide");
+    fb_check(ink_w[2] > ink_h[2] && ink_w[3] > ink_h[3],
+             "right and left are wider than they are tall");
 
     // Over-long text clips at the right edge instead of wrapping. A wrapped row would turn
     // one slot into two, which is the reason VIEW_COLS exists at all.

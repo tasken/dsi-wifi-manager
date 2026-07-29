@@ -1,6 +1,4 @@
-// SPDX-License-Identifier: CC0-1.0
-//
-// The backup file format from DESIGN.md. Portable for the same reason wifi_slots.c is:
+// The backup file format. Portable for the same reason wifi_slots.c is:
 // tools/host_slotlist.c builds a file with this code and tools/decode_backup.py reads
 // it back, so the format is exercised without a console.
 //
@@ -16,7 +14,7 @@
 // trip is byte-exact by construction. Each record carries its slot and family, so
 // restore never has to infer them from length.
 //
-// A file written by this code holds WiFi passphrases in plaintext, because that is how
+// A file written by this code holds Wi-Fi passphrases in plaintext, because that is how
 // the hardware stores them. Anything that reads the SD card can read them.
 
 #ifndef BACKUP_FILE_H
@@ -38,8 +36,11 @@
                          WIFI_MAX_SLOTS * BACKUP_REC_HEADER_LEN + \
                          3 * WIFI_TWL_LEN + 3 * WIFI_NTR_LEN)
 
-// Directory is DSIWIFI/<MAC>/, MAC as 12 uppercase hex digits with no separators --
-// the same per-console foldering fwTool uses, so two consoles cannot collide.
+// Directory is DSIWIFI/<MAC>/, 12 uppercase hex digits, matching fwTool's FW<MAC>/.
+//
+// The folder groups by console and shows provenance; it is NOT what prevents collisions --
+// pick_name() checks access(F_OK) and never returns an existing name. Do not hash the MAC to
+// "anonymise" it: 24 of its 48 bits are a known Nintendo OUI, so a digest is a 2^24 search.
 #define BACKUP_DIR_ROOT     "DSIWIFI"
 #define BACKUP_EXT          ".dswifi"
 #define BACKUP_DIR_LEN      (sizeof(BACKUP_DIR_ROOT) + 12 + 1)

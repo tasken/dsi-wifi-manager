@@ -1,6 +1,6 @@
 # Flash and BIOS dumps. Never commit these.
 #
-# dsfirmware.bin holds the WiFi passphrase in PLAINTEXT (slot 4-6 offset 0x120), the console's
+# dsfirmware.bin holds the Wi-Fi passphrase in PLAINTEXT (slot 4-6 offset 0x120), the console's
 # MAC address at 0x36, the Nintendo WFC user ID at 0xF0, and the owner's nickname/birthday in
 # the user settings block. The BIOS dumps are copyrighted Nintendo code.
 dsidump/
@@ -14,6 +14,7 @@ DSIWIFI/
 __pycache__/
 *.pyc
 *.pyo
+.venv/
 
 # Build output. *.bin above already covers the fixtures that land in build/.
 build/
@@ -30,3 +31,15 @@ build.log
 # the same image, and nothing in the build references them yet. Drop this line once
 # one is chosen and wired into GAME_ICON.
 resources/
+
+# tools/ is default-deny: only the six the build and the test suite actually need are tracked.
+# Scratch scripts keep appearing here while assets are being iterated on, and six of them had
+# to be un-tracked one at a time before this rule existed. Anything new is ignored until it is
+# listed, which is the safe direction.
+tools/*
+!tools/crosscheck.py
+!tools/decode_backup.py
+!tools/decode_wifi.py
+!tools/host_slotlist.c
+!tools/make_fixture.py
+!tools/make_font.py
