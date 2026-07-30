@@ -41,22 +41,18 @@ typedef char view_line_t[VIEW_SCRATCH];
 _Static_assert(VIEW_SCRATCH > VIEW_COLS,
                "a composed line plus its NUL must fit the scratch buffer");
 
-static void default_sink(view_pane_t pane, view_attr_t attr, const char *line)
+static void default_sink(view_pane_t pane, view_attr_t attr, const char *line,
+                         const view_attr_t *spans)
 {
     // A host build that never calls view_set_sink() gets one undifferentiated stream,
     // which is what a quick `--list` wants. tools/host_slotlist.c installs its own.
     (void)pane;
     (void)attr;
+    (void)spans;
     printf("%.*s\n", VIEW_COLS, line);
 }
 
 static view_sink_t sink = default_sink;
-static view_segs_sink_t segs_sink = NULL;
-
-void view_set_segs_sink(view_segs_sink_t fn)
-{
-    segs_sink = fn;
-}
 
 void view_set_sink(view_sink_t fn)
 {
@@ -65,26 +61,16 @@ void view_set_sink(view_sink_t fn)
 
 static void emit(view_pane_t pane, view_attr_t attr, const char *line)
 {
-    sink(pane, attr, line);
+    sink(pane, attr, line, NULL);
 }
 
-// A row of coloured pieces. Falls back to one flat line when no segment sink is installed, so
-// the caller never has to ask which it got.
-static void emit_segs(view_pane_t pane, const view_seg_t *segs, uint8_t count)
+// A row whose characters are individually coloured. Only the write confirmation uses this.
+static void emit_spans(view_pane_t pane, view_attr_t attr, const char *line,
+                       const view_attr_t *spans)
 {
-    if (segs_sink != NULL)
-    {
-        segs_sink(pane, segs, count);
-        return;
-    }
-
-    view_line_t line;
-    size_t at = 0;
-    for (uint8_t i = 0; i < count && at < sizeof(line) - 1; i++)
-        at += (size_t)snprintf(line + at, sizeof(line) - at, "%s", segs[i].text);
-
-    emit(pane, count ? segs[count - 1].attr : VIEW_PLAIN, line);
+    sink(pane, attr, line, spans);
 }
+
 
 // The bottom pane is where all the pre-existing screens draw, so it gets the short name.
 // The plain forms are the common case; the _a forms are for the few lines that carry a
@@ -613,18 +599,24 @@ void view_conn_row(const wifi_slot_t *s, bool cursor)
 //
 // Centralised because it had drifted: the same action read "pick" on one screen and "choose" on
 // another, and the spacing between pairs was 2, 3 or 4 depending on the screen.
+static void put_keys_a(view_attr_t attr, const char *legend)
+{
+    emit(VIEW_FOOTER, attr, legend);
+}
+
 static void put_keys(const char *legend)
 {
-    emit(VIEW_FOOTER, VIEW_DIM, legend);
+    put_keys_a(VIEW_DIM, legend);
 }
 
 void view_keys(bool debug)
 {
     // The About screen is raw flash offsets, so it is a Dev-build affordance and says so in the
-    // colour every other debug affordance uses. It flows with the content rather than joining the
-    // footer: the footer is one row, and a Dev-only extra should not push a real action off it.
+    // colour every other debug affordance uses. Pinned two rows above the footer rather than
+    // joining it: the footer is one row and a Dev-only extra must not push a real action off it,
+    // but flowing under the list made it read as part of the list.
     if (debug)
-        put_a(VIEW_DEBUG, "<SELECT> Flash layout");
+        emit(VIEW_HINT, VIEW_DEBUG, "<SELECT> Flash layout");
 
     // No blank line before this any more. It was separating the legend from the list back when
     // the legend flowed; the footer is pinned to the last row now, so the gap is whatever is
@@ -653,7 +645,7 @@ void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename
     put(dir);
     put(filename);
     put("");
-    put("A write     B cancel");
+    put_keys("<A> Write   <B> Cancel");
 }
 
 void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
@@ -686,7 +678,7 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
     }
 
     put("");
-    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
+    put_keys(ok ? "<A> Continue" : "<B> Back");
 }
 
 // --- restore ---------------------------------------------------------------------
@@ -816,10 +808,10 @@ void view_pick_file(const backup_entry_t *entries, uint8_t count, uint8_t cursor
         }
     }
 
-    put("");
-    put_a(VIEW_DIM, (fitting > VIEW_PICK_ROWS)
-        ? "UP/DN scroll   A pick   X delete   B back"
-        : "UP/DN move   A pick   X delete   B back");
+    // One legend either way. It used to say "scroll" when the list was longer than the window
+    // and "move" otherwise, which cost a column the widest form could not spare once every key
+    // gained its brackets.
+    put_keys("<UP/DN> Move   <A> Select   <X> Delete   <B> Back");
 }
 
 void view_none_fit(const wifi_slot_t *dest)
@@ -975,29 +967,42 @@ void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
     put("Enter this to continue:");
     put("");
 
-    // Each symbol coloured by whether it has been entered, as Cart-Flasher does it.
+    // Each symbol coloured by whether it has been entered.
     //
-    // Entered symbols are VIEW_GOOD (green) and pending ones VIEW_PLAIN (white). Deliberately
-    // not accent-to-good, which is what the palette would otherwise suggest: FB_ACCENT and
-    // FB_GOOD are two saturated colours about 12-13 five-bit steps apart per channel, while
-    // white-to-green is a brightness collapse that cannot be misread. Cart-Flasher records the
-    // same reasoning. This is the one screen where miscounting gates an irreversible write, so
-    // legibility beats palette consistency.
-    // The pieces hold pointers, not copies, so this text has to outlive the loop that builds
-    // them. Function-scope rather than declared inside the loop, where a `static` array reads as
-    // though each iteration got its own.
-    static char cell[VIEW_COMBO_LEN + 1][5];
+    // Entered symbols are VIEW_GOOD (green) and pending ones VIEW_PLAIN (white). Deliberately not
+    // accent-to-good, which is what the palette would otherwise suggest: FB_ACCENT and FB_GOOD are
+    // two saturated colours about 12-13 five-bit steps apart per channel, while white-to-green is
+    // a brightness collapse that cannot be misread. This is the one screen where miscounting gates
+    // an irreversible write, so legibility beats palette consistency.
+    //
+    // Built as one string plus one attribute per character, so strlen() still equals the rendered
+    // width and the overlong check reads this row like any other.
+    view_line_t row;
+    view_attr_t spans[VIEW_SCRATCH];
+    size_t len = 0;
 
-    view_seg_t segs[VIEW_COMBO_LEN + 2];
-    uint8_t n = 0;
-    segs[n++] = (view_seg_t){ "    ", VIEW_PLAIN };
-    for (uint8_t i = 0; i <= VIEW_COMBO_LEN; i++)
+    for (int i = 0; i < 4 && len < sizeof(row) - 1; i++, len++)
     {
-        char sym = (i < VIEW_COMBO_LEN) ? view_combo_symbol(seq[i]) : 'A';
-        snprintf(cell[i], sizeof(cell[i]), (i < VIEW_COMBO_LEN) ? "%c   " : "%c", sym);
-        segs[n++] = (view_seg_t){ cell[i], (i < at) ? VIEW_GOOD : VIEW_PLAIN };
+        row[len] = ' ';
+        spans[len] = VIEW_PLAIN;
     }
-    emit_segs(VIEW_BOTTOM, segs, n);
+
+    for (uint8_t i = 0; i <= VIEW_COMBO_LEN && len < sizeof(row) - 1; i++)
+    {
+        // Four columns per symbol, matching the marker arithmetic above, so a glance cannot
+        // mistake one symbol for its neighbour.
+        int wide = (i < VIEW_COMBO_LEN) ? 4 : 1;
+        view_attr_t a = (i < at) ? VIEW_GOOD : VIEW_PLAIN;
+
+        for (int c = 0; c < wide && len < sizeof(row) - 1; c++, len++)
+        {
+            row[len] = (c == 0) ? ((i < VIEW_COMBO_LEN) ? view_combo_symbol(seq[i]) : 'A') : ' ';
+            spans[len] = a;
+        }
+    }
+    row[len] = '\0';
+
+    emit_spans(VIEW_BOTTOM, VIEW_PLAIN, row, spans);
 
     // The marker stays under the next symbol. Colour says how far you have come; this says
     // which one is next, and one signal doing both jobs was ambiguous at the final A.
@@ -1072,7 +1077,7 @@ void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
     }
 
     put("");
-    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
+    put_keys(ok ? "<A> Continue" : "<B> Back");
 }
 
 
@@ -1158,7 +1163,7 @@ void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
         put_a(VIEW_DEBUG, "It programs zero bytes, because libnds skips");
         put_a(VIEW_DEBUG, "any page whose contents already match.");
         put("");
-        put_a(VIEW_DEBUG, "<X> Write anyway   <B> Back");
+        put_keys_a(VIEW_DEBUG, "<X> Write anyway   <B> Back");
     }
     else
     {
@@ -1264,7 +1269,7 @@ void view_about(const wifi_layout_t *layout)
     put_a(VIEW_DEBUG, "never assumed, so a console laid out");
     put_a(VIEW_DEBUG, "differently still decodes correctly.");
     put("");
-    put_a(VIEW_DEBUG, "<B> Back");
+    put_keys_a(VIEW_DEBUG, "<B> Back");
 }
 
 void view_no_backups(void)
@@ -1330,5 +1335,5 @@ void view_delete_result(bool ok, const char *name, const char *detail)
     }
 
     put("");
-    put_a(VIEW_DIM, ok ? "A  OK" : "B  back");
+    put_keys(ok ? "<A> Continue" : "<B> Back");
 }

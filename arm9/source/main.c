@@ -139,7 +139,8 @@ static void attr_colours(view_attr_t attr, uint16_t *fg, uint16_t *bg)
 
 // The view layer composes lines and hands them here with the pane and the attribute. This
 // is the only thing in the app that knows a pane is a framebuffer.
-static void fb_sink(view_pane_t pane, view_attr_t attr, const char *line)
+static void fb_sink(view_pane_t pane, view_attr_t attr, const char *line,
+                    const view_attr_t *spans)
 {
     uint16_t fg, bg;
     attr_colours(attr, &fg, &bg);
@@ -147,36 +148,37 @@ static void fb_sink(view_pane_t pane, view_attr_t attr, const char *line)
     // Rows past the bottom are dropped by fb_row_text rather than wrapping round to the
     // top, so an over-long screen loses its tail instead of corrupting the one above it.
     // tools/crosscheck.py counts rows per screen so that shows up on a PC, not here.
-    if (pane == VIEW_FOOTER)
+    // VIEW_FOOTER is pinned to the last row, so it does not move with the content above it and
+    // does not consume a row from the flow. Drawn on the bottom screen, where the user acts.
+    int row;
+    switch (pane)
     {
-        // Pinned, so it does not move with the content above it and does not consume a row from
-        // the flow. Drawn on the bottom screen because that is where the user acts.
-        fb_row_text(pane_fb[VIEW_BOTTOM], FB_ROWS - 1, fg, bg, line);
+        case VIEW_FOOTER: row = FB_ROWS - 1; break;   // last row
+        case VIEW_HINT:   row = FB_ROWS - 3; break;   // one blank row above the footer
+        default:          row = pane_row[pane]++; break;
+    }
+    uint16_t *fb = pane_fb[(pane == VIEW_FOOTER || pane == VIEW_HINT) ? VIEW_BOTTOM : pane];
+
+    // The whole row first, so it paints the background and erases any longer line underneath.
+    fb_row_text(fb, row, fg, bg, line);
+
+    if (spans == NULL)
         return;
-    }
 
-    fb_row_text(pane_fb[pane], pane_row[pane]++, fg, bg, line);
-}
-
-// One row built from coloured pieces. fb_row_text paints the whole row, so the first piece uses
-// it to clear any longer line underneath and the rest are drawn at their own columns with
-// fb_text, which does not repaint the row.
-static void fb_segs_sink(view_pane_t pane, const view_seg_t *segs, uint8_t count)
-{
-    int row = (pane == VIEW_FOOTER) ? (FB_ROWS - 1) : pane_row[pane]++;
-    uint16_t *fb = pane_fb[(pane == VIEW_FOOTER) ? VIEW_BOTTOM : pane];
-    int col = 0;
-
-    fb_row_text(fb, row, FB_TEXT, FB_BG, "");
-
-    for (uint8_t i = 0; i < count; i++)
+    // Then repaint only the characters whose own attribute differs, one cell at a time. fb_text
+    // does not touch the rest of the row, so the background above survives.
+    for (int col = 0; line[col] != '\0' && col < FB_COLS; col++)
     {
-        uint16_t fg, bg;
-        attr_colours(segs[i].attr, &fg, &bg);
-        fb_text(fb, col, row, fg, bg, segs[i].text);
-        col += (int)strlen(segs[i].text);
+        if (spans[col] == attr)
+            continue;
+
+        uint16_t sfg, sbg;
+        char one[2] = { line[col], '\0' };
+        attr_colours(spans[col], &sfg, &sbg);
+        fb_text(fb, col, row, sfg, sbg, one);
     }
 }
+
 
 // The handful of one-line progress and error messages this file emits directly. Routed
 // through the same sink so they obey the same width discipline as every other line
@@ -193,14 +195,14 @@ static void msg(view_attr_t attr, const char *fmt, ...)
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
 
-    fb_sink(VIEW_BOTTOM, attr, line);
+    fb_sink(VIEW_BOTTOM, attr, line, NULL);
 }
 
 // A blank row. Its own function rather than msg(attr, "") because that is a formatted
 // call with nothing to format, which -Wformat-zero-length rightly complains about.
 static void blank(void)
 {
-    fb_sink(VIEW_BOTTOM, VIEW_PLAIN, "");
+    fb_sink(VIEW_BOTTOM, VIEW_PLAIN, "", NULL);
 }
 
 
@@ -279,7 +281,10 @@ static void message_a(view_attr_t attr, const char *title,
     if (l3)
         msg(VIEW_PLAIN, "%s", l3);
     blank();
-    msg(VIEW_DIM, (attr == VIEW_GOOD) ? "A  OK" : "B  back");
+    // Same <KEY> Verb form and same verbs as every legend in slot_list_view.c. Emitted through
+    // msg() rather than the view layer's footer, because this helper draws a whole screen by
+    // itself and does not go through a view function.
+    msg(VIEW_DIM, (attr == VIEW_GOOD) ? "<A> Continue" : "<B> Back");
     wait_for_key(KEY_A | KEY_B);
 }
 
@@ -1211,7 +1216,6 @@ int main(void)
     clear_bottom();
 
     view_set_sink(fb_sink);
-    view_set_segs_sink(fb_segs_sink);
 
     if (readFirmware(0, header, sizeof(header)) != 0)
         die("Could not read the flash header.");

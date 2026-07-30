@@ -34,10 +34,17 @@ typedef enum {
     // So placement is declared rather than computed: the view says "footer", the sink decides
     // where that is. One row only, matching Cart-Flasher; anything that wants to sit above it
     // stays part of the normal flow.
-    VIEW_FOOTER = 2
+    VIEW_FOOTER = 2,
+
+    // Two rows above the footer, leaving one blank row between them. For a secondary hint that
+    // belongs with the actions rather than with the content -- currently only the Dev-build
+    // affordance, which flowed under the list before and read as part of it.
+    //
+    // The gap is the point: without it the hint looks like a second action of equal standing.
+    VIEW_HINT = 3
 } view_pane_t;
 
-#define VIEW_PANES 3
+#define VIEW_PANES 4
 
 // How a line should read, not what colour it is -- the sink owns the palette.
 //
@@ -53,22 +60,19 @@ typedef enum {
     VIEW_DEBUG      // present only in a Dev build: raw offsets, forced writes
 } view_attr_t;
 
-typedef void (*view_sink_t)(view_pane_t pane, view_attr_t attr, const char *line);
-
-// One row built from differently-coloured pieces, for the write confirmation: Cart-Flasher
-// colours each symbol of the combo by whether it has been entered, and a line-at-a-time sink
-// cannot express that because it carries one attribute per line.
+// `spans`, when not NULL, is one attribute per character of `line`, exactly strlen(line) long.
+// It overrides `attr` for the characters it covers and is what lets the write confirmation colour
+// each symbol of the sequence by whether it has been entered.
 //
-// Only that screen needs it. A sink that does not install a handler still gets the row, as one
-// line in the last piece's colour, so nothing has to implement this to keep working.
-typedef struct {
-    const char  *text;
-    view_attr_t  attr;
-} view_seg_t;
-
-typedef void (*view_segs_sink_t)(view_pane_t pane, const view_seg_t *segs, uint8_t count);
-
-void view_set_segs_sink(view_segs_sink_t sink);
+// A span array rather than a list of coloured pieces, which is what this used to be: the row
+// stays a single string, so strlen(line) still equals the rendered width and the overlong check
+// in tools/crosscheck.py keeps reading the line exactly as it always did. Splitting a row into
+// pieces meant the harness had to reassemble it before it could measure it.
+//
+// Every caller but one passes NULL, and a sink may ignore `spans` entirely and still be correct
+// to the character -- it just loses the colouring.
+typedef void (*view_sink_t)(view_pane_t pane, view_attr_t attr, const char *line,
+                            const view_attr_t *spans);
 
 // Install the sink. Until this is called, every pane goes to stdout undistinguished,
 // which is what a plain host build wants and what the app did before it had two screens.

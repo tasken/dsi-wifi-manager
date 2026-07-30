@@ -9,7 +9,7 @@ Build the app (see below) and place the resulting `.dsi` on your SD card. You ne
 1. Launch DSi Wi-Fi Manager from your homebrew launcher.
 1. Pick a connection from the list and press `A` to open it.
 1. To save a copy, select `Back up`, then confirm. Your backup is saved to `DSIWIFI/<your MAC>` on the SD card.
-1. To put one back, select `Restore`, pick a backup, choose whether to keep an undo copy, then input the key combo to proceed.
+1. To put one back, select `Restore`, pick a backup, choose whether to keep an undo copy, then enter the key combo to proceed. Get the combo wrong and it just starts over, so a mistyped press does not lose the restore.
 
 Connections 1-3 and 4-6 store settings differently, so a backup only fits the group it came from. The app offers the ones that fit and refuses the rest.
 

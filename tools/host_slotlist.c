@@ -93,14 +93,23 @@ static char attr_tag(view_attr_t a)
 static int pane_rows[VIEW_PANES];
 static int overtall_screens = 0;
 
-static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line)
+// A pinned hint sits at FB_ROWS - 3. If a screen's own rows ever reach that far the two collide
+// and one silently overwrites the other, which no width or height check would notice: every line
+// is legal and the flow itself still fits.
+static int hint_rows = 0;
+static int hint_collisions = 0;
+
+static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line,
+                        const view_attr_t *spans)
 {
     size_t n = strlen(line);
 
     // The footer is pinned, so it is not part of the flow and must not count toward the row
     // budget the overtall check reads. Tagged 'F' so a pinned line is visible as one here.
-    if (pane != VIEW_FOOTER)
+    if (pane != VIEW_FOOTER && pane != VIEW_HINT)
         pane_rows[pane]++;
+    else if (pane == VIEW_HINT)
+        hint_rows++;
 
     // The arrow glyphs are CP437's codepoints 0x18-0x1B, which a terminal would eat. They are
     // substituted for display only: one byte in still means one glyph out, so the width count
@@ -118,41 +127,36 @@ static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line)
     shown[sizeof(shown) - 1] = '\0';
     line = shown;
 
-    const char *tag = (pane == VIEW_TOP) ? "T" : (pane == VIEW_FOOTER) ? "F" : "B";
+    const char *tag = (pane == VIEW_TOP) ? "T"
+                    : (pane == VIEW_FOOTER) ? "F"
+                    : (pane == VIEW_HINT) ? "H" : "B";
     printf("%s%c|%.*s%s\n", tag, attr_tag(attr), VIEW_COLS, line,
            (n > (size_t)VIEW_COLS) ? "   <-- OVERLONG, CUT ON THE CONSOLE" : "");
 
     if (n > (size_t)VIEW_COLS)
         overlong_lines++;
-}
 
-// A row of coloured pieces. Printed as the composed row plus a second line marking each piece's
-// attribute under it, so per-symbol colouring is visible in the test output and a mistake in the
-// progress logic shows up here rather than only on a console.
-static void tagged_segs_sink(view_pane_t pane, const view_seg_t *segs, uint8_t count)
-{
-    char row[256], marks[256];
-    size_t at = 0;
-
-    for (uint8_t i = 0; i < count && at < sizeof(row) - 1; i++)
+    // Per-character attributes printed under the row using the same letters, so --screens shows
+    // the confirm sequence's progression and a mistake in it fails here rather than only on a
+    // console. Not counted as a pane row: it is a note about the row above, not a row.
+    if (spans != NULL)
     {
-        size_t len = strlen(segs[i].text);
-        for (size_t j = 0; j < len && at < sizeof(row) - 1; j++, at++)
-        {
-            row[at] = segs[i].text[j];
-            marks[at] = attr_tag(segs[i].attr);
-        }
+        printf("  ");
+        for (size_t i = 0; i < n && i < (size_t)VIEW_COLS; i++)
+            putchar(spans[i] == attr ? '.' : attr_tag(spans[i]));
+        printf("   <- per-character attributes\n");
     }
-    row[at] = marks[at] = '\0';
-
-    tagged_sink(pane, VIEW_PLAIN, row);
-    printf("  %s   <- piece colours\n", marks);
 }
+
 
 // Also the screen boundary: every screen is drawn between two of these, so this is where
 // the row counts get judged and reset.
 static void ruler(void)
 {
+    // Read before the loop below zeroes it: the collision check needs the bottom pane's depth,
+    // and the hint is drawn on the bottom screen.
+    int bottom_rows = pane_rows[VIEW_BOTTOM];
+
     for (int p = 0; p < 2; p++)
     {
         if (pane_rows[p] > FB_ROWS)
@@ -163,6 +167,14 @@ static void ruler(void)
         }
         pane_rows[p] = 0;
     }
+
+    if (hint_rows > 0 && bottom_rows > FB_ROWS - 3)
+    {
+        printf("  a pinned hint at row %d collides with %d rows of content"
+               "   <-- HINT COLLISION\n", FB_ROWS - 3, bottom_rows);
+        hint_collisions++;
+    }
+    hint_rows = 0;
 
     printf("  %s\n", RULER);
 }
@@ -742,6 +754,89 @@ static bool all_pixels_opaque(const uint16_t *fb)
     return true;
 }
 
+
+// --- the confirm sequence's per-symbol colouring, asserted -----------------------------------
+//
+// --screens shows the progression, but showing is not checking: nothing failed if the colouring
+// was wrong, so a change to the span arithmetic could have gone through silently. This drives
+// view_restore_confirm() at known values of `at` and reads the span array back.
+static char        cap_line[256];
+static view_attr_t cap_spans[256];
+static bool        cap_have;
+
+static void capture_sink(view_pane_t pane, view_attr_t attr, const char *line,
+                         const view_attr_t *spans)
+{
+    (void)pane;
+    (void)attr;
+
+    // Only the spanned row is of interest; every other line on the screen arrives with NULL.
+    if (spans == NULL)
+        return;
+
+    size_t n = strlen(line);
+    if (n >= sizeof(cap_line))
+        n = sizeof(cap_line) - 1;
+
+    memcpy(cap_line, line, n);
+    cap_line[n] = '\0';
+    memcpy(cap_spans, spans, n * sizeof(view_attr_t));
+    cap_have = true;
+}
+
+// Column of symbol `i` on the confirm row: four leading spaces, then four columns per symbol.
+#define COMBO_COL(i) (4 + (i) * 4)
+
+static void combo_span_checks(void)
+{
+    // Values that matter: nothing entered, part way, and every direction entered with only the
+    // final A outstanding. The last is the one that used to be ambiguous.
+    static const uint8_t stages[] = { 0, 2, VIEW_COMBO_LEN };
+    const uint8_t seq[VIEW_COMBO_LEN] = { 0, 2, 1, 3 };
+
+    wifi_slot_t src = { 0 }, dst = { 0 };
+    src.number = 1; src.family = WIFI_FAMILY_NTR; src.length = WIFI_NTR_LEN;
+    dst.number = 2; dst.family = WIFI_FAMILY_NTR; dst.length = WIFI_NTR_LEN;
+
+    view_sink_t saved = tagged_sink;
+    for (size_t k = 0; k < sizeof(stages) / sizeof(stages[0]); k++)
+    {
+        uint8_t at = stages[k];
+        char what[64];
+
+        cap_have = false;
+        view_set_sink(capture_sink);
+        view_restore_confirm(&src, &dst, NULL, seq, at);
+        view_set_sink(saved);
+
+        snprintf(what, sizeof(what), "confirm row carries spans at %u entered", at);
+        fb_check(cap_have, what);
+        if (!cap_have)
+            continue;
+
+        bool right = true;
+        for (uint8_t i = 0; i <= VIEW_COMBO_LEN; i++)
+        {
+            view_attr_t want = (i < at) ? VIEW_GOOD : VIEW_PLAIN;
+            int wide = (i < VIEW_COMBO_LEN) ? 4 : 1;
+
+            for (int c = 0; c < wide; c++)
+            {
+                int col = COMBO_COL(i) + c;
+                if (col >= (int)strlen(cap_line) || cap_spans[col] != want)
+                    right = false;
+            }
+        }
+        // The indent must stay neutral, or "how far have I got" starts one symbol early.
+        for (int c = 0; c < 4; c++)
+            if (cap_spans[c] != VIEW_PLAIN)
+                right = false;
+
+        snprintf(what, sizeof(what), "  %u entered green, the rest plain", at);
+        fb_check(right, what);
+    }
+}
+
 static int render_checks(void)
 {
     uint16_t *fb = malloc(FB_PIXELS * sizeof(uint16_t));
@@ -901,6 +996,8 @@ static int render_checks(void)
 
     free(fb);
     free(ref);
+
+    combo_span_checks();
 
     printf(fb_fail ? "FAIL: renderer\n" : "PASS: renderer\n");
     return fb_fail ? 1 : 0;
@@ -1067,7 +1164,6 @@ int main(int argc, char **argv)
         // Only the screen modes tag their panes. --fields is a data format, not a
         // rendering, and prefixing it would break crosscheck.py's parser.
         view_set_sink(tagged_sink);
-    view_set_segs_sink(tagged_segs_sink);
 
         if (is_list)
             print_list(&layout, slots, 0);
@@ -1077,9 +1173,10 @@ int main(int argc, char **argv)
         // The line crosscheck.py reads. Zero is the only passing value: a longer line is
         // cut on the console, which loses the end of an SSID or a file name silently.
         ruler();    // judge the last screen's row counts
-        printf("\ncolumns: %d\nrows: %d\noverlong lines: %d\novertall screens: %d\n",
-               VIEW_COLS, FB_ROWS, overlong_lines, overtall_screens);
-        if (overlong_lines != 0 || overtall_screens != 0)
+        printf("\ncolumns: %d\nrows: %d\noverlong lines: %d\novertall screens: %d\n"
+               "hint collisions: %d\n",
+               VIEW_COLS, FB_ROWS, overlong_lines, overtall_screens, hint_collisions);
+        if (overlong_lines != 0 || overtall_screens != 0 || hint_collisions != 0)
             rc = 1;
     }
     else
