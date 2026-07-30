@@ -447,6 +447,11 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
     view_restore_confirm(source, &slots[0], NULL, combo, VIEW_COMBO_LEN);
     ruler();
 
+    printf("\n--- restore: a press that was not the next symbol ---\n");
+    ruler();
+    view_combo_wrong();
+    ruler();
+
     printf("\n--- restore: done ---\n");
     ruler();
     view_restore_result(true, slots[0].number, &slots[0], NULL, NULL);

@@ -584,15 +584,25 @@ void view_conn_row(const wifi_slot_t *s, bool cursor)
 }
 
 
+// The action legend, always the last line of a screen. Cart-Flasher's convention: each entry is
+// <KEY> followed by a capitalised verb, three spaces between entries, drawn in the dim colour.
+//
+// Centralised because it had drifted: the same action read "pick" on one screen and "choose" on
+// another, and the spacing between pairs was 2, 3 or 4 depending on the screen.
+static void put_keys(const char *legend)
+{
+    put_a(VIEW_DIM, legend);
+}
+
 void view_keys(bool debug)
 {
     put("");
-    put_a(VIEW_DIM, "UP/DN move    A open    START exit");
+    put_keys("<UP/DN> Move   <A> Open   <START> Exit");
 
     // The About screen is raw flash offsets, so it is a Dev-build affordance and says so in
     // the colour every other debug affordance uses.
     if (debug)
-        put_a(VIEW_DEBUG, "SELECT  flash layout");
+        put_a(VIEW_DEBUG, "<SELECT> Flash layout");
 }
 
 void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename)
@@ -808,7 +818,7 @@ void view_none_fit(const wifi_slot_t *dest)
     }
 
     put("");
-    put_a(VIEW_DIM, "B  back");
+    put_keys("<B> Back");
 }
 
 void view_pick_record(const backup_entry_t *entry, uint8_t cursor,
@@ -843,7 +853,7 @@ void view_pick_record(const backup_entry_t *entry, uint8_t cursor,
     }
 
     put("");
-    put_a(VIEW_DIM, "A pick   B back");
+    put_keys("<A> Select   <B> Back");
 }
 
 // A cursor menu, not three buttons.
@@ -879,7 +889,7 @@ void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor)
     }
 
     put("");
-    put_a(VIEW_DIM, "A choose    B cancel");
+    put_keys("<A> Select   <B> Cancel");
 }
 
 // Directions as the renderer's arrow glyphs, which are real triangles rather than the
@@ -965,7 +975,20 @@ void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
     put_a(VIEW_ACCENT, caret);
 
     put("");
-    put_a(VIEW_DIM, "B cancels");
+    put_keys("<B> Cancel");
+}
+
+// Shown when a press was not the next symbol. Nothing has been written at this point -- the
+// combo gates the write and this is a failure to get through it -- and saying so is the whole
+// point of the screen: the user needs to know the console was not touched before deciding
+// whether to try again.
+void view_combo_wrong(void)
+{
+    put_a(VIEW_BAD, "Wrong button, nothing was written.");
+    put("");
+    put("The sequence starts over.");
+    put("");
+    put_keys("<A> Retry   <B> Cancel");
 }
 
 void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
@@ -1075,7 +1098,7 @@ void view_conn_screen(const wifi_slot_t *s, uint8_t cursor)
     }
 
     put("");
-    put_a(VIEW_DIM, "A choose    B back");
+    put_keys("<A> Select   <B> Back");
 }
 
 void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
@@ -1099,11 +1122,11 @@ void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
         put_a(VIEW_DEBUG, "It programs zero bytes, because libnds skips");
         put_a(VIEW_DEBUG, "any page whose contents already match.");
         put("");
-        put_a(VIEW_DEBUG, "X write anyway    B back");
+        put_a(VIEW_DEBUG, "<X> Write anyway   <B> Back");
     }
     else
     {
-        put_a(VIEW_DIM, "B back");
+        put_keys("<B> Back");
     }
 }
 
@@ -1205,7 +1228,7 @@ void view_about(const wifi_layout_t *layout)
     put_a(VIEW_DEBUG, "never assumed, so a console laid out");
     put_a(VIEW_DEBUG, "differently still decodes correctly.");
     put("");
-    put_a(VIEW_DEBUG, "B back");
+    put_a(VIEW_DEBUG, "<B> Back");
 }
 
 void view_no_backups(void)
@@ -1218,7 +1241,7 @@ void view_no_backups(void)
     put("Back up a connection first, or copy a backup from");
     put("another console onto the card.");
     put("");
-    put_a(VIEW_DIM, "B  back");
+    put_keys("<B> Back");
 }
 
 // --- deleting a backup ----------------------------------------------------------------
@@ -1251,7 +1274,7 @@ void view_delete_confirm(const backup_entry_t *entry, uint8_t cursor)
     }
 
     put("");
-    put_a(VIEW_DIM, "A choose    B cancel");
+    put_keys("<A> Select   <B> Cancel");
 }
 
 void view_delete_result(bool ok, const char *name, const char *detail)

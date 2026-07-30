@@ -698,13 +698,17 @@ static bool confirm_write(const wifi_slot_t *source, const wifi_slot_t *dest,
 
     static const uint32_t dir_key[4] = { KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT };
 
-    for (uint8_t at = 0; ; at++)
+    // A plain while loop with the index moved by hand. A for-loop with at++ in the header needed
+    // at-- and at = (uint8_t)-1 to express "stay here" and "start over", which means relying on
+    // unsigned wraparound in the one function that gates writing to flash.
+    uint8_t at = 0;
+    while (1)
     {
         clear_bottom();
         view_restore_confirm(source, dest, undo, seq, at);
 
-        // Everything that could be pressed, so a wrong press is seen and acted on rather
-        // than ignored until the right one arrives.
+        // Everything that could be pressed, so a wrong press is seen and acted on rather than
+        // ignored until the right one arrives.
         uint32_t want = (at < VIEW_COMBO_LEN) ? dir_key[seq[at] & 3] : KEY_A;
         uint32_t got = wait_for_key(KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT |
                                    KEY_A | KEY_B | KEY_X | KEY_Y);
@@ -712,15 +716,33 @@ static bool confirm_write(const wifi_slot_t *source, const wifi_slot_t *dest,
         if (got & KEY_B)
             return false;
 
-        if (!(got & want))
+        if (got & want)
         {
-            message("Cancelled.", "That was not the next button in the",
-                    "sequence, so nothing was written.", NULL);
-            return false;
+            if (at >= VIEW_COMBO_LEN)
+                return true;            // the whole sequence, then A
+            at++;
+            continue;
         }
 
-        if (at >= VIEW_COMBO_LEN)
-            return true;
+        // Double-tap forgiveness, as Cart-Flasher and GodMode9 do it: pressing the symbol you
+        // just entered again is ignored rather than counted as a mistake. A d-pad press is easy
+        // to double-register, and losing a four-symbol sequence to a bounced button buys no
+        // safety. It only suppresses the failure -- it never advances the combo.
+        //
+        // Safe only because no direction repeats back-to-back where seq is built. If that ever
+        // changes this would swallow a real press, and the user would be stuck pressing the key
+        // the screen says is correct.
+        if (at > 0 && (got & dir_key[seq[at - 1] & 3]))
+            continue;
+
+        // A wrong press restarts the sequence rather than abandoning the restore. Mistyping four
+        // symbols is not a decision to cancel, and this used to treat it as one.
+        clear_bottom();
+        view_combo_wrong();
+        if (!(wait_for_key(KEY_A | KEY_B) & KEY_A))
+            return false;
+
+        at = 0;
     }
 }
 

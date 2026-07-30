@@ -202,6 +202,10 @@ void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor);
 void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
                           const char *undo_name, const uint8_t *seq, uint8_t at);
 
+// A wrong press. Offers a retry rather than ending the flow, matching Cart-Flasher and
+// GodMode9: mistyping a four-symbol sequence is not a decision to abandon the restore.
+void view_combo_wrong(void);
+
 // One character per direction, for the sequence display: the FB_UP/FB_DOWN/FB_LEFT/FB_RIGHT
 // arrow glyphs, and 'A' for the final press. Returns the codepoint, not a legible ASCII
 // stand-in -- tools/host_slotlist.c substitutes "^v><" for a terminal.
