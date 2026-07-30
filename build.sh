@@ -34,7 +34,7 @@ echo "=== $MSG ==="
 # exports SUDO_UID/SUDO_GID for exactly this case; fall back to id for a plain invocation.
 BUILD_UID="${SUDO_UID:-$(id -u)}"
 BUILD_GID="${SUDO_GID:-$(id -g)}"
-echo "Running: sudo docker compose run --rm --build --user \"$BUILD_UID:$BUILD_GID\" dsi_wifi_manager sh -c \"$CMD\" (log: $BUILD_LOG)"
+echo "Running: sudo docker compose run --rm --build -T --user \"$BUILD_UID:$BUILD_GID\" dsi_wifi_manager sh -c \"$CMD\" (log: $BUILD_LOG)"
 echo ""
 # Remove any stale log before tee opens a fresh one. This belongs here and not in the
 # Makefile's clean target: that target runs *inside* the piped command below, after tee has
@@ -48,4 +48,11 @@ rm -f "$BUILD_LOG"
 #
 # pipefail above is what makes the exit status meaningful: without it a failed build inside
 # this pipeline would return tee's status, and a broken build would look like a clean one.
-sudo docker compose run --rm --build --user "$BUILD_UID:$BUILD_GID" dsi_wifi_manager sh -c "$CMD" 2>&1 | tee "$BUILD_LOG"
+# -T disables TTY allocation. Without it `docker compose run` gives the container a pseudo-TTY
+# and writes its output straight to the terminal, so everything after "Container Created" misses
+# the pipe and never reaches tee. A build.log that stops before the compiler runs looks like a
+# clean build, which is worse than no log: grepping it for warnings can then only ever pass.
+#
+# Observed exactly that -- build.log's mtime landed two seconds before arm9.elf's, so tee had
+# already closed while make was still going.
+sudo docker compose run --rm --build -T --user "$BUILD_UID:$BUILD_GID" dsi_wifi_manager sh -c "$CMD" 2>&1 | tee "$BUILD_LOG"
