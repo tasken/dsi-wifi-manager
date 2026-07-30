@@ -1,0 +1,66 @@
+name: Build DSi Wi-Fi Manager
+
+on:
+  push:
+    branches: ["*"]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+  pull_request:
+    branches: ["*"]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Offline test suite
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+      - name: Build the fixture and run the suite
+        # The real dumps are not in the repository, so CI runs against the synthetic flash
+        # only. That still covers the decoder, the backup round trip, every malformed-file
+        # refusal, restore into every slot, and the screen widths.
+        run: |
+          python3 tools/make_fixture.py build/fixture.bin
+          python3 tools/crosscheck.py build/fixture.bin
+
+  build:
+    runs-on: ubuntu-latest
+    container: skylyrac/blocksds:slim-latest
+    env:
+      BLOCKSDS: /opt/wonderful/thirdparty/blocksds/core
+    name: Build with BlocksDS toolchain using official Docker image
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+      - name: Build app
+        id: build
+        # The Makefile builds the output name from the kind and the commit, so that is all this
+        # passes. Nothing from the branch or PR title reaches a shell recipe, which is why
+        # there is no whitelisting step here.
+        run: |
+          set -o pipefail
+          make DSIWIFI_BUILD_KIND=Nightly \
+            DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
+            2>&1 | tee build.log
+      - name: Fail on any compiler warning
+        # This app writes to firmware flash, and a truncation warning is how a silently cut
+        # SSID reaches a screen. The log has to be captured in the build step above for this
+        # to have anything to read -- `make` alone writes no build.log, only ./build.sh does.
+        run: |
+          if grep -qi "warning" build.log; then
+            echo "::error::compiler warnings in build.log"
+            grep -i warning build.log
+            exit 1
+          fi
+          echo "no warnings"
+      - name: Publish build to GH Actions
+        uses: actions/upload-artifact@v7
+        with:
+          # The commit stays in the filename so a downloaded nightly identifies itself.
+          path: dsi_wifi_manager-*.dsi
+          name: dsi_wifi_manager-nightly
+          if-no-files-found: error

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: CC0-1.0
 
 services:
-  dsiwifimanager:
+  dsi_wifi_manager:
     build: .
     volumes:
       - ./:/work

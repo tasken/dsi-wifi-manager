@@ -1,0 +1,68 @@
+name: Build DSi Wi-Fi Manager release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: skylyrac/blocksds:slim-latest
+    env:
+      BLOCKSDS: /opt/wonderful/thirdparty/blocksds/core
+    name: Build with BlocksDS toolchain using official Docker image
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+      - name: Build app
+        id: build
+        # ROM is overridden to the bare name so every release carries an identically-named
+        # asset, keeping the /releases/latest/download/dsi_wifi_manager.dsi URL permanent.
+        # The version and commit on the banner are unaffected.
+        #
+        # DSIWIFI_BUILD_KIND=Release also turns DSIWIFI_DEBUG off, which removes the
+        # flash-layout screen and the ability to force a write that programs nothing.
+        run: |
+          set -o pipefail
+          make ROM=dsi_wifi_manager.dsi \
+            DSIWIFI_BUILD_KIND=Release \
+            DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
+            2>&1 | tee build.log
+      - name: Fail on any compiler warning
+        run: |
+          if grep -qi "warning" build.log; then
+            echo "::error::compiler warnings in build.log"
+            grep -i warning build.log
+            exit 1
+          fi
+          echo "no warnings"
+      - name: Check the ROM really is a Release DSi build
+        # Reads the banner and the unitcode back out of the ROM, which is the only way to know
+        # DSIWIFI_BUILD_KIND reached the binary -- and DEBUG follows from the kind.
+        #
+        # Not checked by looking for debug strings: they are present in every build. The view
+        # layer takes a runtime flag so the offline harness can draw both variants, so the
+        # text compiles in either way and only its reachability changes.
+        run: |
+          python3 - <<'EOF'
+          import struct, sys
+          d = open("dsi_wifi_manager.dsi", "rb").read()
+          off = struct.unpack("<I", d[0x68:0x6C])[0]
+          banner = d[off+0x240:off+0x240+256].decode("utf-16-le", "replace").split("\x00")[0]
+          lines = banner.split("\n")
+          print("banner:", lines)
+          print("unitcode: 0x%02X" % d[0x12])
+          bad = []
+          if not lines[-1].startswith("Release"): bad.append("banner is not a Release build")
+          if d[0x12] != 0x02:                    bad.append("unitcode is not 0x02, DSi-only")
+          if bad:
+              print("::error::" + "; ".join(bad)); sys.exit(1)
+          EOF
+      - name: Upload dsi_wifi_manager.dsi
+        uses: AButler/upload-release-assets@v4.0.0
+        with:
+          files: dsi_wifi_manager.dsi
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
