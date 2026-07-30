@@ -74,9 +74,40 @@ static uint16_t *pane_fb[VIEW_PANES];   // indexed by view_pane_t
 // that into an out-of-bounds write into a framebuffer pointer.
 static int pane_row[VIEW_PANES];
 
+// One blocking 32-bit DMA fill, the colour duplicated into both halves, instead of the 49152
+// halfword stores fb_clear() does. Both panes are cleared on every flow transition and a restore
+// is five screens deep, so that is around 500k stores per restore on a 67MHz ARM9.
+//
+// Deliberately here and not in fb_render.c. That file is compiled for the host by
+// tools/crosscheck.py and run under UBSan, and storing a uint32_t through a uint16_t * is exactly
+// what UBSan is there to catch. fb_clear() stays halfword-only and stays the version the harness
+// and the renderer self-checks exercise.
+//
+// Safe on the DMA channel, established by disassembling this binary rather than taken on trust
+// from the sibling project that suggested it.
+//
+// dmaFillWords compiles to DMA3: after building, the only DMA register this inlines is
+// 0x040000DC, DMA3's control word. The only other DMA3 users in the image are
+// initSystem -> vramDefault, which runs once before main(), and
+// consoleInitEx -> consoleLoadFont, reachable only from __sassert and exceptionStatePrint. So
+// nothing this app runs can be mid-transfer on DMA3 when a screen is cleared.
+//
+// Nothing on the write path goes near it either: every fifo* function including both IRQ
+// handlers, readFirmware, writeFirmware and the sdmmc SD path reference DMA zero times, and the
+// ARM7 binary contains no DMA at all -- its channels are a separate controller regardless.
+//
+// dmaFillWords also blocks, and this side is single-threaded, so a fill cannot overlap anything
+// else we start. If libnds ever changes which channel it picks, re-check by grepping the
+// disassembly for 0x040000B0 through 0x040000DC; nothing here depends on the number.
+static void pane_fill(uint16_t *fb, uint16_t colour)
+{
+    const uint32_t pixel = colour;
+    dmaFillWords(pixel | (pixel << 16), fb, FB_WIDTH * FB_HEIGHT * sizeof(uint16_t));
+}
+
 static void pane_clear(view_pane_t pane)
 {
-    fb_clear(pane_fb[pane], FB_BG);
+    pane_fill(pane_fb[pane], FB_BG);
     pane_row[pane] = 0;
 }
 
