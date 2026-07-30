@@ -24,8 +24,20 @@
 // interleave, and the width and height checks measure the wrong screen.
 typedef enum {
     VIEW_BOTTOM = 0,
-    VIEW_TOP = 1
+    VIEW_TOP = 1,
+
+    // The bottom screen's last row, whatever the content above it came to. Cart-Flasher pins
+    // its action legend there by naming an absolute row; this app cannot, because screens here
+    // emit lines in order and never name a row -- that is what lets the host harness render the
+    // exact bytes and check widths offline.
+    //
+    // So placement is declared rather than computed: the view says "footer", the sink decides
+    // where that is. One row only, matching Cart-Flasher; anything that wants to sit above it
+    // stays part of the normal flow.
+    VIEW_FOOTER = 2
 } view_pane_t;
+
+#define VIEW_PANES 3
 
 // How a line should read, not what colour it is -- the sink owns the palette.
 //
@@ -42,6 +54,21 @@ typedef enum {
 } view_attr_t;
 
 typedef void (*view_sink_t)(view_pane_t pane, view_attr_t attr, const char *line);
+
+// One row built from differently-coloured pieces, for the write confirmation: Cart-Flasher
+// colours each symbol of the combo by whether it has been entered, and a line-at-a-time sink
+// cannot express that because it carries one attribute per line.
+//
+// Only that screen needs it. A sink that does not install a handler still gets the row, as one
+// line in the last piece's colour, so nothing has to implement this to keep working.
+typedef struct {
+    const char  *text;
+    view_attr_t  attr;
+} view_seg_t;
+
+typedef void (*view_segs_sink_t)(view_pane_t pane, const view_seg_t *segs, uint8_t count);
+
+void view_set_segs_sink(view_segs_sink_t sink);
 
 // Install the sink. Until this is called, every pane goes to stdout undistinguished,
 // which is what a plain host build wants and what the app did before it had two screens.

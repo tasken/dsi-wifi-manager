@@ -51,6 +51,12 @@ static void default_sink(view_pane_t pane, view_attr_t attr, const char *line)
 }
 
 static view_sink_t sink = default_sink;
+static view_segs_sink_t segs_sink = NULL;
+
+void view_set_segs_sink(view_segs_sink_t fn)
+{
+    segs_sink = fn;
+}
 
 void view_set_sink(view_sink_t fn)
 {
@@ -60,6 +66,24 @@ void view_set_sink(view_sink_t fn)
 static void emit(view_pane_t pane, view_attr_t attr, const char *line)
 {
     sink(pane, attr, line);
+}
+
+// A row of coloured pieces. Falls back to one flat line when no segment sink is installed, so
+// the caller never has to ask which it got.
+static void emit_segs(view_pane_t pane, const view_seg_t *segs, uint8_t count)
+{
+    if (segs_sink != NULL)
+    {
+        segs_sink(pane, segs, count);
+        return;
+    }
+
+    view_line_t line;
+    size_t at = 0;
+    for (uint8_t i = 0; i < count && at < sizeof(line) - 1; i++)
+        at += (size_t)snprintf(line + at, sizeof(line) - at, "%s", segs[i].text);
+
+    emit(pane, count ? segs[count - 1].attr : VIEW_PLAIN, line);
 }
 
 // The bottom pane is where all the pre-existing screens draw, so it gets the short name.
@@ -591,18 +615,21 @@ void view_conn_row(const wifi_slot_t *s, bool cursor)
 // another, and the spacing between pairs was 2, 3 or 4 depending on the screen.
 static void put_keys(const char *legend)
 {
-    put_a(VIEW_DIM, legend);
+    emit(VIEW_FOOTER, VIEW_DIM, legend);
 }
 
 void view_keys(bool debug)
 {
-    put("");
-    put_keys("<UP/DN> Move   <A> Open   <START> Exit");
-
-    // The About screen is raw flash offsets, so it is a Dev-build affordance and says so in
-    // the colour every other debug affordance uses.
+    // The About screen is raw flash offsets, so it is a Dev-build affordance and says so in the
+    // colour every other debug affordance uses. It flows with the content rather than joining the
+    // footer: the footer is one row, and a Dev-only extra should not push a real action off it.
     if (debug)
         put_a(VIEW_DEBUG, "<SELECT> Flash layout");
+
+    // No blank line before this any more. It was separating the legend from the list back when
+    // the legend flowed; the footer is pinned to the last row now, so the gap is whatever is
+    // left over.
+    put_keys("<UP/DN> Move   <A> Open   <START> Exit");
 }
 
 void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename)
@@ -940,34 +967,43 @@ void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
     put_a(VIEW_BAD, "This changes your console's settings.");
     put("");
 
-    // The sequence, spaced wide so a glance cannot mistake one symbol for its neighbour.
-    char combo[VIEW_COMBO_LEN * 4 + 2];
-    int at_col = 0;
-    for (uint8_t i = 0; i < VIEW_COMBO_LEN; i++)
-    {
-        combo[i * 4 + 0] = view_combo_symbol(seq[i]);
-        combo[i * 4 + 1] = ' ';
-        combo[i * 4 + 2] = ' ';
-        combo[i * 4 + 3] = ' ';
-        if (i == at)
-            at_col = i * 4;
-    }
-    combo[VIEW_COMBO_LEN * 4] = 'A';
-    combo[VIEW_COMBO_LEN * 4 + 1] = '\0';
-    if (at >= VIEW_COMBO_LEN)
-        at_col = VIEW_COMBO_LEN * 4;
+    // Where the marker goes. The symbols themselves are built as coloured pieces below; this is
+    // only the column arithmetic, four columns per symbol so a glance cannot mistake one for
+    // its neighbour.
+    int at_col = (at >= VIEW_COMBO_LEN) ? (VIEW_COMBO_LEN * 4) : (at * 4);
 
     put("Enter this to continue:");
     put("");
-    snprintf(line, sizeof(line), "    %s", combo);
-    put_a(VIEW_ACCENT, line);
 
-    // An underline beneath the next symbol. Progress is shown under the row rather than by
-    // redrawing the row itself, because a sequence that changes as you enter it invites
-    // misreading the part you have not reached.
+    // Each symbol coloured by whether it has been entered, as Cart-Flasher does it.
     //
-    // A '-' rather than a '^': the symbols above are now real triangles, and a caret sitting
-    // directly under the up arrow read as a second, smaller arrow.
+    // Entered symbols are VIEW_GOOD (green) and pending ones VIEW_PLAIN (white). Deliberately
+    // not accent-to-good, which is what the palette would otherwise suggest: FB_ACCENT and
+    // FB_GOOD are two saturated colours about 12-13 five-bit steps apart per channel, while
+    // white-to-green is a brightness collapse that cannot be misread. Cart-Flasher records the
+    // same reasoning. This is the one screen where miscounting gates an irreversible write, so
+    // legibility beats palette consistency.
+    // The pieces hold pointers, not copies, so this text has to outlive the loop that builds
+    // them. Function-scope rather than declared inside the loop, where a `static` array reads as
+    // though each iteration got its own.
+    static char cell[VIEW_COMBO_LEN + 1][5];
+
+    view_seg_t segs[VIEW_COMBO_LEN + 2];
+    uint8_t n = 0;
+    segs[n++] = (view_seg_t){ "    ", VIEW_PLAIN };
+    for (uint8_t i = 0; i <= VIEW_COMBO_LEN; i++)
+    {
+        char sym = (i < VIEW_COMBO_LEN) ? view_combo_symbol(seq[i]) : 'A';
+        snprintf(cell[i], sizeof(cell[i]), (i < VIEW_COMBO_LEN) ? "%c   " : "%c", sym);
+        segs[n++] = (view_seg_t){ cell[i], (i < at) ? VIEW_GOOD : VIEW_PLAIN };
+    }
+    emit_segs(VIEW_BOTTOM, segs, n);
+
+    // The marker stays under the next symbol. Colour says how far you have come; this says
+    // which one is next, and one signal doing both jobs was ambiguous at the final A.
+    //
+    // A '-' rather than a '^': the symbols above are real triangles, and a caret directly under
+    // the up arrow read as a second, smaller arrow.
     char caret[VIEW_COMBO_LEN * 4 + 8];
     memset(caret, ' ', sizeof(caret));
     caret[4 + at_col] = '-';

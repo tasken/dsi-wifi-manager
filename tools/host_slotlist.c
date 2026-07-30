@@ -90,14 +90,17 @@ static char attr_tag(view_attr_t a)
 // Rows used by each pane on the screen being drawn. The renderer drops a row past the
 // bottom of the screen, so a screen that grows too tall loses its tail silently -- the
 // width check cannot see that, because every individual line is still legal.
-static int pane_rows[2];
+static int pane_rows[VIEW_PANES];
 static int overtall_screens = 0;
 
 static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line)
 {
     size_t n = strlen(line);
 
-    pane_rows[pane]++;
+    // The footer is pinned, so it is not part of the flow and must not count toward the row
+    // budget the overtall check reads. Tagged 'F' so a pinned line is visible as one here.
+    if (pane != VIEW_FOOTER)
+        pane_rows[pane]++;
 
     // The arrow glyphs are CP437's codepoints 0x18-0x1B, which a terminal would eat. They are
     // substituted for display only: one byte in still means one glyph out, so the width count
@@ -115,11 +118,35 @@ static void tagged_sink(view_pane_t pane, view_attr_t attr, const char *line)
     shown[sizeof(shown) - 1] = '\0';
     line = shown;
 
-    printf("%s%c|%.*s%s\n", (pane == VIEW_TOP) ? "T" : "B", attr_tag(attr), VIEW_COLS, line,
+    const char *tag = (pane == VIEW_TOP) ? "T" : (pane == VIEW_FOOTER) ? "F" : "B";
+    printf("%s%c|%.*s%s\n", tag, attr_tag(attr), VIEW_COLS, line,
            (n > (size_t)VIEW_COLS) ? "   <-- OVERLONG, CUT ON THE CONSOLE" : "");
 
     if (n > (size_t)VIEW_COLS)
         overlong_lines++;
+}
+
+// A row of coloured pieces. Printed as the composed row plus a second line marking each piece's
+// attribute under it, so per-symbol colouring is visible in the test output and a mistake in the
+// progress logic shows up here rather than only on a console.
+static void tagged_segs_sink(view_pane_t pane, const view_seg_t *segs, uint8_t count)
+{
+    char row[256], marks[256];
+    size_t at = 0;
+
+    for (uint8_t i = 0; i < count && at < sizeof(row) - 1; i++)
+    {
+        size_t len = strlen(segs[i].text);
+        for (size_t j = 0; j < len && at < sizeof(row) - 1; j++, at++)
+        {
+            row[at] = segs[i].text[j];
+            marks[at] = attr_tag(segs[i].attr);
+        }
+    }
+    row[at] = marks[at] = '\0';
+
+    tagged_sink(pane, VIEW_PLAIN, row);
+    printf("  %s   <- piece colours\n", marks);
 }
 
 // Also the screen boundary: every screen is drawn between two of these, so this is where
@@ -1040,6 +1067,7 @@ int main(int argc, char **argv)
         // Only the screen modes tag their panes. --fields is a data format, not a
         // rendering, and prefixing it would break crosscheck.py's parser.
         view_set_sink(tagged_sink);
+    view_set_segs_sink(tagged_segs_sink);
 
         if (is_list)
             print_list(&layout, slots, 0);

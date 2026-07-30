@@ -64,12 +64,15 @@ static bool have_sd;
 // never returns otherwise, so on every console this app runs on both engines are ours.
 // It uses banks A through D itself on the path that never comes back here.
 
-static uint16_t *pane_fb[2];    // indexed by view_pane_t
+static uint16_t *pane_fb[VIEW_PANES];   // indexed by view_pane_t
 
 // The framebuffer has no cursor of its own, so the sink keeps one. Reset by the clear,
 // which is why clearing and resetting are the same call: apart, they drift, and a screen
 // drawn on top of the last one is the result.
-static int pane_row[2];
+// Sized for every pane value, not just the two with a running row. VIEW_FOOTER is handled
+// before these are indexed, and sizing them to match means a future reorder cannot turn
+// that into an out-of-bounds write into a framebuffer pointer.
+static int pane_row[VIEW_PANES];
 
 static void pane_clear(view_pane_t pane)
 {
@@ -113,7 +116,35 @@ static void fb_sink(view_pane_t pane, view_attr_t attr, const char *line)
     // Rows past the bottom are dropped by fb_row_text rather than wrapping round to the
     // top, so an over-long screen loses its tail instead of corrupting the one above it.
     // tools/crosscheck.py counts rows per screen so that shows up on a PC, not here.
+    if (pane == VIEW_FOOTER)
+    {
+        // Pinned, so it does not move with the content above it and does not consume a row from
+        // the flow. Drawn on the bottom screen because that is where the user acts.
+        fb_row_text(pane_fb[VIEW_BOTTOM], FB_ROWS - 1, fg, bg, line);
+        return;
+    }
+
     fb_row_text(pane_fb[pane], pane_row[pane]++, fg, bg, line);
+}
+
+// One row built from coloured pieces. fb_row_text paints the whole row, so the first piece uses
+// it to clear any longer line underneath and the rest are drawn at their own columns with
+// fb_text, which does not repaint the row.
+static void fb_segs_sink(view_pane_t pane, const view_seg_t *segs, uint8_t count)
+{
+    int row = (pane == VIEW_FOOTER) ? (FB_ROWS - 1) : pane_row[pane]++;
+    uint16_t *fb = pane_fb[(pane == VIEW_FOOTER) ? VIEW_BOTTOM : pane];
+    int col = 0;
+
+    fb_row_text(fb, row, FB_TEXT, FB_BG, "");
+
+    for (uint8_t i = 0; i < count; i++)
+    {
+        uint16_t fg, bg;
+        attr_colours(segs[i].attr, &fg, &bg);
+        fb_text(fb, col, row, fg, bg, segs[i].text);
+        col += (int)strlen(segs[i].text);
+    }
 }
 
 // The handful of one-line progress and error messages this file emits directly. Routed
@@ -523,14 +554,18 @@ static int choose_with(uint8_t n, draw_fn draw, void *ctx, uint32_t extra, uint8
             return CHOOSE_EXTRA;
         }
 
-        if (down & KEY_UP)
+        // Stops at the ends rather than wrapping, as Cart-Flasher's lists do. Wrapping makes the
+        // first and last entries adjacent, which on the restore pickers means one press past the
+        // end lands on a different destination than the one you were heading for. Redrawing only
+        // on an actual move also keeps a held key from flickering the screen at a boundary.
+        if ((down & KEY_UP) && cursor > 0)
         {
-            cursor = (cursor == 0) ? (uint8_t)(n - 1) : (uint8_t)(cursor - 1);
+            cursor--;
             draw(cursor, ctx);
         }
-        else if (down & KEY_DOWN)
+        else if ((down & KEY_DOWN) && cursor + 1 < n)
         {
-            cursor = (uint8_t)((cursor + 1) % n);
+            cursor++;
             draw(cursor, ctx);
         }
     }
@@ -1145,6 +1180,7 @@ int main(void)
     clear_bottom();
 
     view_set_sink(fb_sink);
+    view_set_segs_sink(fb_segs_sink);
 
     if (readFirmware(0, header, sizeof(header)) != 0)
         die("Could not read the flash header.");
@@ -1192,14 +1228,15 @@ int main(void)
         if (down & KEY_START)
             break;
 
-        if (down & KEY_UP)
+        // Same as every other list here: stops at the ends, and only redraws when it moved.
+        if ((down & KEY_UP) && cursor > 0)
         {
-            cursor = (cursor == 0) ? (uint8_t)(layout.count - 1) : (uint8_t)(cursor - 1);
+            cursor--;
             draw_list(cursor);
         }
-        else if (down & KEY_DOWN)
+        else if ((down & KEY_DOWN) && cursor + 1 < layout.count)
         {
-            cursor = (uint8_t)((cursor + 1) % layout.count);
+            cursor++;
             draw_list(cursor);
         }
         else if (down & KEY_A)
