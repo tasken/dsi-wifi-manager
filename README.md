@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="icon.png" alt="DSi Wi-Fi Manager icon" width="96">
-</p>
-
 # DSi Wi-Fi Manager
 
 A DSi homebrew application to back up and restore the console's six Wi-Fi connections to/from the SD card.
@@ -23,11 +19,8 @@ Connections 1-3 and 4-6 store settings differently, so a backup only fits the gr
 > [!WARNING]
 > **A backup contains your Wi-Fi password in plain text**, because that is how the console stores it. Anything that can read your SD card can read the password. The app says so on screen before writing the file.
 
-> [!TIP]
-> Restore a connection onto itself first. That writes nothing at all and the app says so in advance, which makes it a free way to confirm the write path works on your console.
-
 > [!NOTE]
-> It will not run on a DS, a DS Lite, or a DSi booted in DS mode. Connections 4-6 do not exist there, and the app refuses rather than showing you half your settings.
+> It will not run on a DS, a DS Lite, or a DSi booted in DS mode. C
 
 ## Building
 
