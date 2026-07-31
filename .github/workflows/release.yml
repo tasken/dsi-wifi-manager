@@ -53,7 +53,7 @@ jobs:
           fi
           echo "no warnings"
       - name: Keep the ROM for the verify job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-rom
           path: dsi_wifi_manager.dsi
@@ -72,7 +72,7 @@ jobs:
     name: Verify the ROM and attach it to the release
     steps:
       - name: Fetch the ROM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-rom
       - name: Check the ROM really is a Release DSi build
