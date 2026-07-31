@@ -4,7 +4,8 @@ The project is **GPL-3.0**, in [`../LICENSE`](../LICENSE). That governs every fi
 say otherwise, which is how Cart-Flasher does it too: an `SPDX-License-Identifier` appears only
 on a file whose terms differ from the root licence.
 
-Four files differ:
+Four source files differ — `dsi_only.c`, `font_spleen.h`, `fb_render.c` and `fb_render.h`. The
+build files carry a CC0 tag too, for the reason given below the table.
 
 | file | licence | why | notice |
 |---|---|---|---|
