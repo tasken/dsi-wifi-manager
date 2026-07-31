@@ -42,10 +42,11 @@ jobs:
         # passes. Nothing from the branch or PR title reaches a shell recipe, which is why
         # there is no whitelisting step here.
         run: |
-          set -o pipefail
-          make DSIWIFI_BUILD_KIND=Nightly \
-            DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
-            2>&1 | tee build.log
+          # No pipefail: the container's shell is dash, which does not have it, and `make | tee`
+          # would then report tee's status and a broken build would look clean. Redirecting and
+          # replaying the log keeps make's own exit status without needing bash.
+          make DSIWIFI_BUILD_KIND=Nightly DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
+          cat build.log
       - name: Check this really is a debug build
         # Nightlies are for testing, so the flash-layout screen and the forced no-op write must
         # be present. Read back out of build.log rather than assumed from the build kind: the

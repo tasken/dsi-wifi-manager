@@ -30,11 +30,11 @@ jobs:
         # DSIWIFI_BUILD_KIND=Release also turns DSIWIFI_DEBUG off, which removes the
         # flash-layout screen and the ability to force a write that programs nothing.
         run: |
-          set -o pipefail
-          make ROM=dsi_wifi_manager.dsi \
-            DSIWIFI_BUILD_KIND=Release \
-            DSIWIFI_COMMIT="${{ github.event.release.tag_name }}" \
-            2>&1 | tee build.log
+          # No pipefail: the container's shell is dash, which does not have it, and `make | tee`
+          # would then report tee's status and a broken build would look clean. Redirecting and
+          # replaying the log keeps make's own exit status without needing bash.
+          make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="${{ github.event.release.tag_name }}" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
+          cat build.log
       - name: Check the debug affordances are off
         # A Release that still offered the forced write would put a developer affordance in front
         # of somebody restoring their home network. Checked here rather than by looking for debug

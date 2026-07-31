@@ -11,6 +11,7 @@ Layout follows fwTool (firmware/nds/fwTool/arm9/source/main.cpp:255-267):
     AP1..AP3 at base-0x400 / -0x300 / -0x200   (0x100 each)
     AP4..AP6 at base-0xA00 / -0x800 / -0x600   (0x200 each, DSi only, gated on header[0x1D]==0x57)
 """
+import os
 import sys
 
 SIZE = 128 * 1024
@@ -131,5 +132,8 @@ for n, (off, rec) in sorted(slots.items()):
           f"({len(rec)} bytes, {state})")
 
 out = sys.argv[1] if len(sys.argv) > 1 else "fixture_dsfirmware.bin"
+# The usual destination is build/, which does not exist in a fresh checkout or after
+# `make clean`. crosscheck.py creates it before calling this; CI does not.
+os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 open(out, "wb").write(bytes(fw))
 print(f"\nwrote {out} ({len(fw)} bytes), base = 0x{BASE:05X}")
