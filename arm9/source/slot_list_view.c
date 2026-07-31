@@ -172,6 +172,27 @@ static void top_banner(void)
         pad = 1;
 
     snprintf(line, sizeof(line), "%s%*s%s", VIEW_APP_NAME, pad, "", version);
+
+    // Anything that is not a Release build says so, in the colour every other Dev-only thing
+    // uses. Only the version is coloured; the app name is not a debug affordance.
+    //
+    // The kind comes from the version string this already draws, which the build composes as
+    // "<kind> <commit>". Testing it here rather than taking a flag keeps top_banner() callable
+    // from the dozen screens that use it without threading a parameter through all of them, and
+    // the harness can exercise both branches by compiling with either string.
+    if (strncmp(VIEW_VERSION, "Release", 7) != 0)
+    {
+        view_attr_t spans[VIEW_SCRATCH];
+        size_t len = strlen(line);
+        size_t at = len - strlen(version);
+
+        for (size_t i = 0; i < len && i < sizeof(spans); i++)
+            spans[i] = (i >= at) ? VIEW_DEBUG : VIEW_PLAIN;
+
+        emit_spans(VIEW_TOP, VIEW_PLAIN, line, spans);
+        return;
+    }
+
     top(line);
 }
 

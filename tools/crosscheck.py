@@ -13,6 +13,8 @@ for the host and runs these phases over every dump given:
   5. widths -- draw every screen on both panes; every line must fit VIEW_COLS and every
      screen must fit the display height
   6. renderer -- fb_render.c's own properties, including that every pixel it writes is opaque
+  7. banner -- one build per kind, because the build kind is fixed at compile time: a Dev or
+     Nightly build marks its version in the debug colour, a Release build does not
 
     python3 tools/crosscheck.py dsidump/dsfirmware.bin
     python3 tools/crosscheck.py dsidump/dsfirmware.bin testdata/*.bin build/fixture.bin
@@ -46,8 +48,8 @@ BIN = os.path.join(ROOT, "build", "host_slotlist")
 SCRATCH = os.path.join(ROOT, "build", "crosscheck")
 
 
-def build():
-    os.makedirs(os.path.dirname(BIN), exist_ok=True)
+def build(out=BIN, version=None):
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     # -O2 to match Makefile.arm9. Not for speed: several of gcc's most useful warnings,
     # -Wformat-truncation among them, need optimisation to do their analysis and say
     # nothing at -O0. Without it this build passed clean while the ARM9 build emitted
@@ -56,13 +58,14 @@ def build():
     # string that overflows would fail the widths phase on a build that is otherwise fine.
     # A real one is now short -- "Dev 18975b7-dirty", or "Release v1.2.3" -- since the branch
     # was dropped from it. Testing well past that keeps the cut path exercised anyway.
-    version = "Dev an-unreasonably-long-version-string-abc1234-dirty"
+    if version is None:
+        version = "Dev an-unreasonably-long-version-string-abc1234-dirty"
 
     cmd = ["gcc", "-std=gnu17", "-Wall", "-Wextra", "-Werror", "-O2",
            f'-DDSIWIFI_VERSION_STR="{version}"',
-           "-I", os.path.join(ROOT, "arm9", "source"), "-o", BIN] + SRC
+           "-I", os.path.join(ROOT, "arm9", "source"), "-o", out] + SRC
     subprocess.run(cmd, check=True)
-    return BIN
+    return out
 
 
 def run_c(path):
@@ -469,6 +472,85 @@ def check_render():
     return 1 if r.returncode else 0
 
 
+# --- the banner's build-kind colour ------------------------------------------------------
+# The one thing in the app whose behaviour is fixed at compile time, so one binary can only
+# ever show one side of it. The suite's own harness is built as a Dev one, which means every
+# other phase watches the coloured branch and nothing watches the plain one -- a later edit
+# could break Release and every test would still pass, until a release shipped looking wrong.
+# Hence a build per kind: the only phase here that compiles more than once, and the only way
+# to assert both halves of a decision the compiler makes.
+APP_NAME = "Wi-Fi Connections"
+BANNER_KINDS = [
+    ("Dev 18975b7", True),
+    ("Nightly 18975b7-dirty", True),
+    ("Release v1.2.3", False),
+]
+
+
+def banner_spans(binary, path):
+    """The banner row's per-character attributes, or None if it carries no span array.
+
+    Returns the span line as printed by --screens: '.' where a character takes the row's own
+    attribute and a letter where it differs. Only the banner is read and nothing from the
+    input is printed, so this is safe to run against a real dump.
+    """
+    out = subprocess.run([binary, "--screens", path], capture_output=True, text=True).stdout
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        # "T |Wi-Fi Connections        Dev 18975b7" -- pane tag, attribute tag, then the row.
+        if len(line) < 4 or line[0] != "T" or line[2] != "|":
+            continue
+        row = line[3:]
+        if not row.startswith(APP_NAME):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if nxt.endswith("<- per-character attributes"):
+            return row, nxt[2:].split("   <-")[0]
+        return row, None
+    return None, None
+
+
+def check_banner(path):
+    """Non-Release builds mark the version in the debug colour; Release builds do not."""
+    print("\nbanner")
+    os.makedirs(SCRATCH, exist_ok=True)
+    bad = 0
+
+    for version, coloured in BANNER_KINDS:
+        binary = build(os.path.join(SCRATCH, "banner"), version)
+        row, spans = banner_spans(binary, path)
+
+        if row is None:
+            print(f"  FAIL: no banner row drawn for a {version.split()[0]} build")
+            bad += 1
+            continue
+
+        if not coloured:
+            if spans is None:
+                print(f"  {version.split()[0]:8} version drawn plain")
+            else:
+                print(f"  FAIL: a {version.split()[0]} build coloured its version: {spans}")
+                bad += 1
+            continue
+
+        # The version is right-aligned, so the marked run is exactly its trailing characters
+        # and everything before it must be the row's own attribute. Checking the boundary and
+        # not just the count is the point: an off-by-one here would colour a space, or the
+        # last letter of the app name, and still mark the right number of cells.
+        want = "." * (len(row) - len(version)) + "D" * len(version)
+        if spans == want:
+            print(f"  {version.split()[0]:8} version marked debug, {len(version)} cells, "
+                  f"app name plain")
+        else:
+            print(f"  FAIL: a {version.split()[0]} build marked the wrong cells")
+            print(f"    want {want}")
+            print(f"    got  {spans if spans is not None else 'no spans at all'}")
+            bad += 1
+
+    print("FAIL: banner" if bad else "PASS: banner")
+    return 1 if bad else 0
+
+
 def check_widths(path):
     """Every rendered line fits its screen, on both panes.
 
@@ -750,6 +832,8 @@ def main(paths):
         failures.append("arity")
     if check_doc_secrets(paths):
         failures.append("docs")
+    if check_banner(paths[0]):
+        failures.append("banner")
     for p in paths:
         rc = check_dump(p)
         rc |= check_backup(p)
