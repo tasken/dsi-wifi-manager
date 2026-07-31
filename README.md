@@ -28,15 +28,13 @@ Connections 1-3 and 4-6 store settings differently, so a backup only fits the gr
 ./build.sh
 ```
 
-Builds inside Docker with the BlocksDS toolchain included. [docs/BUILD.md](docs/BUILD.md) covers the output naming and versioning; [docs/TESTING.md](docs/TESTING.md) covers the offline test suite.
+Builds inside Docker with the BlocksDS toolchain included. Releases are named `dsi_wifi_manager.dsi`; local and nightly builds carry their build kind and commit.
 
-## Documentation
+The offline test suite runs the app's own portable sources on a PC:
 
-*   [HARDWARE.md](docs/HARDWARE.md) — where the settings live, the record layout, and what the firmware rewrites behind your back
-*   [ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the app is put together, and the invariants
-*   [TESTING.md](docs/TESTING.md) — the test suite and its inputs
-*   [SECURITY.md](docs/SECURITY.md) — what is sensitive in a dump or a backup
-*   [BUILD.md](docs/BUILD.md) — building, versioning and the banner
+```shell
+python3 tools/crosscheck.py <flash images...>
+```
 
 ## Credits
 
