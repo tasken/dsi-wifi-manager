@@ -31,6 +31,15 @@ jobs:
             DSIWIFI_BUILD_KIND=Release \
             DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
             2>&1 | tee build.log
+      - name: Check the debug affordances are off
+        # A Release that still offered the forced write would put a developer affordance in front
+        # of somebody restoring their home network. Checked here rather than by looking for debug
+        # strings in the ROM: those are compiled into every build, because the view layer takes a
+        # runtime flag so the offline harness can draw both variants. Only the flag differs.
+        run: |
+          grep -q "kind=Release debug=0" build.log || {
+            echo "::error::release build has debug affordances on"; grep "BUILD   kind=" build.log; exit 1; }
+          echo "debug affordances off"
       - name: Fail on any compiler warning
         run: |
           if grep -qi "warning" build.log; then

@@ -46,6 +46,14 @@ jobs:
           make DSIWIFI_BUILD_KIND=Nightly \
             DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
             2>&1 | tee build.log
+      - name: Check this really is a debug build
+        # Nightlies are for testing, so the flash-layout screen and the forced no-op write must
+        # be present. Read back out of build.log rather than assumed from the build kind: the
+        # two are derived in the Makefile and this is what proves the derivation held.
+        run: |
+          grep -q "kind=Nightly debug=1" build.log || {
+            echo "::error::nightly is not a debug build"; grep "BUILD   kind=" build.log; exit 1; }
+          echo "debug build confirmed"
       - name: Fail on any compiler warning
         # This app writes to firmware flash, and a truncation warning is how a silently cut
         # SSID reaches a screen. The log has to be captured in the build step above for this

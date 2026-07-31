@@ -44,6 +44,12 @@ DSIWIFI_BUILD_KIND ?= Dev
 # therefore the safe way to exercise writeFirmware end to end. That used to be the normal
 # flow and was the recommended first hardware test; it is not something to leave in front
 # of somebody restoring their home network.
+# On for every build kind except Release. Nightlies are for testing, so they keep the flash
+# layout screen and the forced no-op write; a Release must not put either in front of somebody
+# restoring their home network.
+#
+# Derived from the kind rather than passed separately, so the two cannot disagree. CI asserts
+# the resolved value out of build.log rather than trusting this line -- see .github/workflows.
 DSIWIFI_DEBUG	?= $(if $(filter Release,$(DSIWIFI_BUILD_KIND)),0,1)
 export DSIWIFI_DEBUG
 
@@ -131,6 +137,7 @@ dump:
 GAME_FULL_TITLE := $(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)
 
 $(ROM): arm9 arm7
+	@echo "  BUILD   kind=$(DSIWIFI_BUILD_KIND) debug=$(DSIWIFI_DEBUG)"
 	@echo "  NDSTOOL $@"
 	$(V)$(BLOCKSDS)/tools/ndstool/ndstool -c $@ \
 		-7 build/arm7.elf -9 build/arm9.elf \
