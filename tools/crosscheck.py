@@ -21,6 +21,7 @@ Values are compared, never echoed: a real dump's SSID stays out of the transcrip
 mismatch is reported by field name and length rather than by content. Passphrase, PSK,
 WEP keys, MAC and WFC user ID are compared as raw bytes and never printed in any form.
 """
+import glob
 import os
 import re
 import subprocess
@@ -623,6 +624,119 @@ def check_doc_secrets(paths):
     return 0
 
 
+# --- call sites against declared signatures ----------------------------------------------
+# The one class of error this suite is structurally blind to. It compiles the five portable
+# files, never main.c -- that needs libnds -- so changing a function's signature and missing a
+# caller in main.c gets found by a docker build and not before. It happened: the sink gained a
+# `spans` parameter and msg()/blank() kept calling it with three arguments.
+#
+# Cheap to check without a compiler: read the declared parameter count out of our own headers,
+# count the arguments at every call site, compare. Only our functions, so libnds and libc are
+# out of scope and there is nothing to false-positive on.
+def _strip_c(text):
+    """Comments and string/char literals out, so parens inside them cannot be miscounted."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", " ", text)
+    text = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', text)
+    text = re.sub(r"'(?:[^'\\\n]|\\.)*'", "' '", text)
+    return text
+
+
+def _arg_count(inside):
+    if not inside.strip():
+        return 0
+    depth = n = 0
+    for ch in inside:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            n += 1
+    return n + 1
+
+
+def _call_args(text, open_paren):
+    depth, j = 0, open_paren
+    while j < len(text):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren + 1:j]
+        j += 1
+    return None
+
+
+def check_arity():
+    print("arity")
+
+    types = r"void|bool|int|char|size_t|uint\d+_t|const char \*|wifi_family_t|conn_action_t|backup_err_t|wifi_layout_err_t|restore_err_t"
+    declared = {}
+    for header in sorted(glob.glob(os.path.join(ROOT, "arm9", "source", "*.h"))):
+        body = _strip_c(open(header, encoding="utf-8").read())
+        for m in re.finditer(rf"\b(?:{types})\s+\**(\w+)\s*\(([^;{{}}]*)\)\s*;", body):
+            name, params = m.group(1), m.group(2).strip()
+            # Function-pointer typedefs declare a type, not a callable of ours.
+            if "(*" in m.group(0):
+                continue
+            variadic = params.endswith("...")
+            n = 0 if params in ("void", "") else _arg_count(params)
+            if variadic:
+                n -= 1                      # "..." is not an argument
+            declared[name] = (n, os.path.basename(header), variadic)
+
+    # Static functions too, and this is the part that matters: the break this phase exists to
+    # catch was fb_sink, which is static in main.c and therefore in no header. A check that only
+    # read headers would have watched the wrong thing.
+    def statics_of(body):
+        out = {}
+        for m in re.finditer(rf"\bstatic\s+(?:inline\s+)?(?:{types})\s+\**(\w+)\s*\(([^;{{}}]*)\)\s*{{",
+                             body):
+            params = m.group(2).strip()
+            variadic = params.endswith("...")
+            n = 0 if params in ("void", "") else _arg_count(params)
+            if variadic:
+                n -= 1
+            out[m.group(1)] = (n, "same file", variadic)
+        return out
+
+    checked = bad = 0
+    for rel in ("arm9/source/main.c", "tools/host_slotlist.c",
+                "arm9/source/slot_list_view.c", "arm9/source/backup_file.c",
+                "arm9/source/restore.c", "arm9/source/wifi_slots.c"):
+        raw = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        body = _strip_c(raw)
+        # Header declarations plus this file's own statics. Statics win on a name clash: a static
+        # of the same name shadows the header's within this translation unit.
+        scope = dict(declared)
+        scope.update(statics_of(body))
+        for name, (want, header, variadic) in scope.items():
+            for m in re.finditer(rf"(?<![\w.>-]){re.escape(name)}\s*\(", body):
+                inside = _call_args(body, m.end() - 1)
+                if inside is None:
+                    continue
+                # The definition itself, not a call.
+                if re.search(rf"\b(?:{types})\s+\**{re.escape(name)}\s*$",
+                             body[:m.start() + len(name)]):
+                    continue
+                checked += 1
+                got = _arg_count(inside)
+                ok = (got >= want) if variadic else (got == want)
+                if not ok:
+                    line = raw[:m.start()].count("\n") + 1
+                    print(f"  MISMATCH {rel}:{line} {name}() has {got} arg(s), "
+                          f"{header} declares {want}{' or more' if variadic else ''}")
+                    bad += 1
+
+    if bad:
+        print(f"FAIL: {bad} call site(s) disagree with a declaration")
+        return 1
+    print(f"PASS: {checked} call sites match their declarations")
+    return 0
+
+
 def main(paths):
     ensure_fixture(paths)
     build()
@@ -632,6 +746,8 @@ def main(paths):
         failures.append("naming")
     if check_render():
         failures.append("renderer")
+    if check_arity():
+        failures.append("arity")
     if check_doc_secrets(paths):
         failures.append("docs")
     for p in paths:
