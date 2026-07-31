@@ -52,6 +52,29 @@ jobs:
             exit 1
           fi
           echo "no warnings"
+      - name: Keep the ROM for the verify job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-rom
+          path: dsi_wifi_manager.dsi
+          retention-days: 1
+
+  verify:
+    # A separate job on the runner, not in the build container: the BlocksDS image has no
+    # python3, and this check has to decode a little-endian offset and a UTF-16 banner. Doing
+    # that in the container's dash with od and awk would be fragile in a step whose whole job
+    # is to be trustworthy.
+    #
+    # The asset is only attached once this passes, so a ROM that fails verification is never
+    # published.
+    needs: build
+    runs-on: ubuntu-latest
+    name: Verify the ROM and attach it to the release
+    steps:
+      - name: Fetch the ROM
+        uses: actions/download-artifact@v4
+        with:
+          name: release-rom
       - name: Check the ROM really is a Release DSi build
         # Reads the banner and the unitcode back out of the ROM, which is the only way to know
         # DSIWIFI_BUILD_KIND reached the binary -- and DEBUG follows from the kind.
