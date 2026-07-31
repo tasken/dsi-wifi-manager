@@ -485,7 +485,7 @@ def check_render():
 # Each case is (version string, DSIWIFI_DEBUG, is the version marked). The Makefile derives both
 # fields from the build kind, so these are the three shapes it can produce -- and a release
 # carries the bare tag, because "Release v1.2.3" would name itself twice.
-APP_NAME = "Wi-Fi Connections"
+APP_NAME = "DSi Wi-Fi Manager"
 BANNER_KINDS = [
     ("Dev 18975b7", 1, True),
     ("Nightly 18975b7-dirty", 1, True),
@@ -503,7 +503,7 @@ def banner_spans(binary, path):
     out = subprocess.run([binary, "--screens", path], capture_output=True, text=True).stdout
     lines = out.splitlines()
     for i, line in enumerate(lines):
-        # "T |Wi-Fi Connections        Dev 18975b7" -- pane tag, attribute tag, then the row.
+        # "T |DSi Wi-Fi Manager        Dev 18975b7" -- pane tag, attribute tag, then the row.
         if len(line) < 4 or line[0] != "T" or line[2] != "|":
             continue
         row = line[3:]

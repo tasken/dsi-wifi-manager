@@ -168,7 +168,10 @@ static void ssid_text(const wifi_slot_t *s, int room, char *buf, size_t len)
 
 // --- the top pane ------------------------------------------------------------------
 
-#define VIEW_APP_NAME "Wi-Fi Connections"
+// The app's own name, matching GAME_TITLE in the Makefile so the launcher and the top screen
+// agree. It used to read "Wi-Fi Connections", which is what the *list* is called -- the bottom
+// screen already says that, and the top pane is the one place the app identifies itself.
+#define VIEW_APP_NAME "DSi Wi-Fi Manager"
 
 static void top_banner(void)
 {
