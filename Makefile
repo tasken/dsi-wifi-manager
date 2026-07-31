@@ -60,14 +60,10 @@ GAME_SUBTITLE2	:= $(DSIWIFI_VERSION)
 
 export DSIWIFI_VERSION
 
-# Generated from a 32x32 source and checked in, so the
-# build needs nothing but the container. It lives at the root rather than in gfx/, because
-# GFXDIRS makes grit process everything in gfx/ as a sprite sheet.
-#
-# Re-run the tool if the artwork changes; it fails rather than shipping an icon the console
-# would render with holes in it. The default $(BLOCKSDS)/sys/icon.bmp was a generic DS and
-# shipped for four milestones.
-GAME_ICON	:= icon.png
+# Indexed 4bpp with palette index 0 reserved for transparency, generated from the artwork and
+# checked in, so the build needs nothing but the container. Not in gfx/: GFXDIRS makes grit
+# process everything there as a sprite sheet. See docs/BUILD.md for the palette rule.
+GAME_ICON	:= resources/icon.png
 
 # Tools
 # -----

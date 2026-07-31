@@ -27,10 +27,11 @@ build.log
 *.a
 *.d
 
-# Icon and logo drafts. Deliberately out of the repo for now -- 60-odd variants of
-# the same image, and nothing in the build references them yet. Drop this line once
-# one is chosen and wired into GAME_ICON.
-resources/
+# Two images only: icon.png, which the banner embeds, and logo.png for the README and the
+# Universal Updater listing. Working sizes and drafts stay out.
+resources/*
+!resources/icon.png
+!resources/logo.png
 
 # tools/ is default-deny: only the six the build and the test suite actually need are tracked.
 # Scratch scripts keep appearing here while assets are being iterated on, and six of them had
