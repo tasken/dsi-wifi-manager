@@ -48,7 +48,7 @@ BIN = os.path.join(ROOT, "build", "host_slotlist")
 SCRATCH = os.path.join(ROOT, "build", "crosscheck")
 
 
-def build(out=BIN, version=None):
+def build(out=BIN, version=None, debug=1):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     # -O2 to match Makefile.arm9. Not for speed: several of gcc's most useful warnings,
     # -Wformat-truncation among them, need optimisation to do their analysis and say
@@ -61,8 +61,11 @@ def build(out=BIN, version=None):
     if version is None:
         version = "Dev an-unreasonably-long-version-string-abc1234-dirty"
 
+    # DSIWIFI_DEBUG is what the banner reads to decide whether to mark the version, so it has
+    # to be a build parameter here too: the harness cannot flip it at runtime any more than the
+    # console can. Defaults to 1, matching every other phase's Dev-shaped harness.
     cmd = ["gcc", "-std=gnu17", "-Wall", "-Wextra", "-Werror", "-O2",
-           f'-DDSIWIFI_VERSION_STR="{version}"',
+           f'-DDSIWIFI_VERSION_STR="{version}"', f"-DDSIWIFI_DEBUG={debug}",
            "-I", os.path.join(ROOT, "arm9", "source"), "-o", out] + SRC
     subprocess.run(cmd, check=True)
     return out
@@ -479,11 +482,14 @@ def check_render():
 # could break Release and every test would still pass, until a release shipped looking wrong.
 # Hence a build per kind: the only phase here that compiles more than once, and the only way
 # to assert both halves of a decision the compiler makes.
+# Each case is (version string, DSIWIFI_DEBUG, is the version marked). The Makefile derives both
+# fields from the build kind, so these are the three shapes it can produce -- and a release
+# carries the bare tag, because "Release v1.2.3" would name itself twice.
 APP_NAME = "Wi-Fi Connections"
 BANNER_KINDS = [
-    ("Dev 18975b7", True),
-    ("Nightly 18975b7-dirty", True),
-    ("Release v1.2.3", False),
+    ("Dev 18975b7", 1, True),
+    ("Nightly 18975b7-dirty", 1, True),
+    ("v1.2.3", 0, False),
 ]
 
 
@@ -511,25 +517,33 @@ def banner_spans(binary, path):
 
 
 def check_banner(path):
-    """Non-Release builds mark the version in the debug colour; Release builds do not."""
+    """A build with the Dev affordances marks its version; a release does not."""
     print("\nbanner")
     os.makedirs(SCRATCH, exist_ok=True)
     bad = 0
 
-    for version, coloured in BANNER_KINDS:
-        binary = build(os.path.join(SCRATCH, "banner"), version)
+    for version, debug, coloured in BANNER_KINDS:
+        kind = version.split()[0]
+        binary = build(os.path.join(SCRATCH, "banner"), version, debug)
         row, spans = banner_spans(binary, path)
 
         if row is None:
-            print(f"  FAIL: no banner row drawn for a {version.split()[0]} build")
+            print(f"  FAIL: no banner row drawn for a {kind} build")
+            bad += 1
+            continue
+
+        # A release must not name itself: its version is the tag alone. Asserted here because
+        # the Makefile composes it and nothing else would notice "Release v1.2.3" coming back.
+        if not debug and kind in ("Dev", "Nightly", "Release"):
+            print(f"  FAIL: a release names its build kind: {version!r}")
             bad += 1
             continue
 
         if not coloured:
             if spans is None:
-                print(f"  {version.split()[0]:8} version drawn plain")
+                print(f"  {kind:8} version drawn plain, no build kind named")
             else:
-                print(f"  FAIL: a {version.split()[0]} build coloured its version: {spans}")
+                print(f"  FAIL: a {kind} build coloured its version: {spans}")
                 bad += 1
             continue
 
@@ -539,10 +553,9 @@ def check_banner(path):
         # last letter of the app name, and still mark the right number of cells.
         want = "." * (len(row) - len(version)) + "D" * len(version)
         if spans == want:
-            print(f"  {version.split()[0]:8} version marked debug, {len(version)} cells, "
-                  f"app name plain")
+            print(f"  {kind:8} version marked debug, {len(version)} cells, app name plain")
         else:
-            print(f"  FAIL: a {version.split()[0]} build marked the wrong cells")
+            print(f"  FAIL: a {kind} build marked the wrong cells")
             print(f"    want {want}")
             print(f"    got  {spans if spans is not None else 'no spans at all'}")
             bad += 1

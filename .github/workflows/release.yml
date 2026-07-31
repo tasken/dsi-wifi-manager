@@ -21,7 +21,11 @@ jobs:
         id: build
         # ROM is overridden to the bare name so every release carries an identically-named
         # asset, keeping the /releases/latest/download/dsi_wifi_manager.dsi URL permanent.
-        # The version and commit on the banner are unaffected.
+        #
+        # A release shows its tag on the banner rather than a commit hash: the tag is what a user
+        # can read back to you, and the release itself already pins the exact commit. Nightlies
+        # have no tag and keep the hash. Fed through DSIWIFI_COMMIT because that is the field the
+        # banner prints; a long tag is cut with a '~' rather than overflowing the row.
         #
         # DSIWIFI_BUILD_KIND=Release also turns DSIWIFI_DEBUG off, which removes the
         # flash-layout screen and the ability to force a write that programs nothing.
@@ -29,7 +33,7 @@ jobs:
           set -o pipefail
           make ROM=dsi_wifi_manager.dsi \
             DSIWIFI_BUILD_KIND=Release \
-            DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) \
+            DSIWIFI_COMMIT="${{ github.event.release.tag_name }}" \
             2>&1 | tee build.log
       - name: Check the debug affordances are off
         # A Release that still offered the forced write would put a developer affordance in front
@@ -55,18 +59,26 @@ jobs:
         # Not checked by looking for debug strings: they are present in every build. The view
         # layer takes a runtime flag so the offline harness can draw both variants, so the
         # text compiles in either way and only its reachability changes.
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           python3 - <<'EOF'
-          import struct, sys
+          import os, struct, sys
           d = open("dsi_wifi_manager.dsi", "rb").read()
           off = struct.unpack("<I", d[0x68:0x6C])[0]
           banner = d[off+0x240:off+0x240+256].decode("utf-16-le", "replace").split("\x00")[0]
           lines = banner.split("\n")
+          tag = os.environ["TAG"]
           print("banner:", lines)
           print("unitcode: 0x%02X" % d[0x12])
           bad = []
-          if not lines[-1].startswith("Release"): bad.append("banner is not a Release build")
-          if d[0x12] != 0x02:                    bad.append("unitcode is not 0x02, DSi-only")
+          # The version line is the tag alone. Equality rather than a prefix is the point: it
+          # also catches a build kind leaking back in, since "Release v1.2.3" would slip past
+          # any test that only asked whether the tag was present.
+          if lines[-1] != tag:
+              bad.append(f"version line is {lines[-1]!r}, expected the tag {tag!r}")
+          if d[0x12] != 0x02:
+              bad.append("unitcode is not 0x02, DSi-only")
           if bad:
               print("::error::" + "; ".join(bad)); sys.exit(1)
           EOF

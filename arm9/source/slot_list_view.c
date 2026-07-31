@@ -31,6 +31,21 @@ typedef char view_line_t[VIEW_SCRATCH];
 #endif
 #define VIEW_VERSION DSIWIFI_VERSION_STR
 
+// Whether this build carries the Dev affordances. The banner marks the version in the debug
+// colour when it does, which is the same flag the flash-layout screen and the forced write are
+// gated on -- so the marker cannot disagree with what the build actually offers.
+//
+// This used to test the version string for the word "Release". That broke the moment a release
+// stopped naming its kind, and it was always the weaker check: it described the string rather
+// than the build.
+//
+// Read here rather than passed in: top_banner() is called from a dozen screens and threading a
+// parameter through all of them to colour one row is not worth it. crosscheck.py compiles this
+// file once per value, which covers both branches.
+#ifndef DSIWIFI_DEBUG
+#define DSIWIFI_DEBUG 0
+#endif
+
 
 // The widest thing describe() can produce is its furniture plus a whole SSID, and the SSID
 // is bounded by the record's field, not by how many columns a screen has. Stating that here
@@ -173,14 +188,11 @@ static void top_banner(void)
 
     snprintf(line, sizeof(line), "%s%*s%s", VIEW_APP_NAME, pad, "", version);
 
-    // Anything that is not a Release build says so, in the colour every other Dev-only thing
-    // uses. Only the version is coloured; the app name is not a debug affordance.
-    //
-    // The kind comes from the version string this already draws, which the build composes as
-    // "<kind> <commit>". Testing it here rather than taking a flag keeps top_banner() callable
-    // from the dozen screens that use it without threading a parameter through all of them, and
-    // the harness can exercise both branches by compiling with either string.
-    if (strncmp(VIEW_VERSION, "Release", 7) != 0)
+    // A build with the Dev affordances says so, in the colour every other Dev-only thing uses.
+    // Only the version is coloured; the app name is not a debug affordance. A release is not
+    // marked and does not name itself either -- its version is the tag alone, and a released
+    // version needs no label to say it is one.
+    if (DSIWIFI_DEBUG)
     {
         view_attr_t spans[VIEW_SCRATCH];
         size_t len = strlen(line);

@@ -54,7 +54,14 @@ DSIWIFI_DEBUG	?= $(if $(filter Release,$(DSIWIFI_BUILD_KIND)),0,1)
 export DSIWIFI_DEBUG
 
 # What the app prints in its banner row, and what line 3 of the ROM banner says.
-DSIWIFI_VERSION	:= $(DSIWIFI_BUILD_KIND) $(DSIWIFI_COMMIT)
+#
+# A release is its tag and nothing else -- "Release v1.2.3" says the same thing twice, and the
+# tag is what a user reads back to you. Every other kind names itself, because "a1b2c3d" alone
+# would not say whether it came from a nightly or somebody's working tree.
+#
+# Kept on one line: a backslash continuation inside $(if) becomes a space, and make does not
+# strip it from the branches -- the banner would gain a leading space nothing else explains.
+DSIWIFI_VERSION	:= $(if $(filter Release,$(DSIWIFI_BUILD_KIND)),$(DSIWIFI_COMMIT),$(DSIWIFI_BUILD_KIND) $(DSIWIFI_COMMIT))
 
 GAME_SUBTITLE2	:= $(DSIWIFI_VERSION)
 
