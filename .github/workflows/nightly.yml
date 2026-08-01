@@ -25,6 +25,23 @@ jobs:
           python3 tools/make_fixture.py build/fixture.bin
           python3 tools/crosscheck.py build/fixture.bin
 
+  build-wrapper:
+    runs-on: ubuntu-latest
+    name: Build through documented wrapper
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+      - name: Build with build.sh
+        run: ./build.sh build
+      - name: Fail on any compiler warning
+        run: |
+          if grep -qi "warning" build.log; then
+            echo "::error::compiler warnings in build.log"
+            grep -i warning build.log
+            exit 1
+          fi
+          echo "no warnings"
+
   build:
     runs-on: ubuntu-latest
     container: skylyrac/blocksds:slim-latest

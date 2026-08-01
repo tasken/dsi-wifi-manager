@@ -4,24 +4,26 @@
 
 # DSi Wi-Fi Manager
 
-A DSi homebrew application to back up and restore the console's six Wi-Fi connections to/from the SD card.
+Back up and restore the six Wi-Fi connections stored in a Nintendo DSi's firmware.
 
 ## Getting started
 
-Download the latest [`dsi_wifi_manager.dsi`](https://github.com/tasken/DSi-WiFi-Manager/releases/latest/download/dsi_wifi_manager.dsi) and place it on your SD card. You need a DSi that can launch DSi-mode homebrew, which usually means Unlaunch.
+Download [`dsi_wifi_manager.dsi`](https://github.com/tasken/DSi-WiFi-Manager/releases/latest/download/dsi_wifi_manager.dsi) and place it on your SD card. You need a DSi that can run DSi-mode homebrew.
 
 1. Launch DSi Wi-Fi Manager from your homebrew launcher.
 1. Pick a connection from the list and press `A` to open it.
-1. To save a copy, select `Back up`, then confirm. Your backup is saved to `DSIWIFI/<your MAC>` on the SD card.
-1. To put one back, select `Restore`, pick a backup, choose whether to keep an undo copy, then enter the key combo to proceed. Get the combo wrong and it just starts over, so a mistyped press does not lose the restore.
+1. Select `Back up` to save that connection to `DSIWIFI/<your MAC>/` on the SD card.
+1. Select `Restore` to choose a backup, optionally save the current connection as an undo copy, then enter the on-screen key combo.
 
-Connections 1-3 and 4-6 store settings differently, so a backup only fits the group it came from. The app offers the ones that fit and refuses the rest.
+Connections 1-3 and 4-6 use different formats: a backup from 1-3 restores only to 1-3, and a backup from 4-6 restores only to 4-6. The app shows only compatible backups.
+
+Restore scans every folder directly inside `DSIWIFI/`, so a backup copied from another DSi can be restored too. The app writes one connection per file, and can also restore one compatible connection from a multi-record backup.
 
 > [!CAUTION]
 > This writes to your console's firmware flash, the same chip System Settings uses when you set up Wi-Fi. It has been tested on one DSi. There is no warranty of any kind.
 
 > [!WARNING]
-> **A backup contains your Wi-Fi password in plain text**, because that is how the console stores it. Anything that can read your SD card can read the password. The app says so on screen before writing the file.
+> **A backup may contain Wi-Fi passwords in plain text**, because that is how the console stores them. Protect your SD card accordingly. The app says so on screen before writing the file.
 
 > [!NOTE]
 > It will not run on a DS, a DS Lite, or a DSi booted in DS mode. Connections 4-6 exist only on a DSi, and the app needs DSi mode to reach the SD card.

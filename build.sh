@@ -6,9 +6,25 @@ cd "$(dirname "$0")"
 
 BUILD_LOG="build.log"
 
-# Check for Docker installation
+# Check for Docker installation.
 if ! command -v docker &> /dev/null; then
     echo "Error: docker is not installed. Please install Docker."
+    exit 1
+fi
+
+# Prefer rootless Docker. Some installations expose the daemon socket only to root; retain
+# the old privileged path as a fallback so `./build.sh` works on both without making sudo the
+# default for people already in the docker group.
+DOCKER=(docker)
+if ! docker info &> /dev/null; then
+    if ! command -v sudo &> /dev/null; then
+        echo "Error: Docker is unavailable and sudo is not installed."
+        exit 1
+    fi
+    DOCKER=(sudo docker)
+fi
+if ! "${DOCKER[@]}" compose version &> /dev/null; then
+    echo "Error: Docker Compose v2 is not available."
     exit 1
 fi
 
@@ -28,13 +44,11 @@ case "$1" in
 esac
 
 echo "=== $MSG ==="
-# Resolve the real invoking user's UID/GID, not the shell's current one: when this whole
-# script is run as `sudo ./build.sh`, `id -u`/`id -g` at this point would already report 0:0
-# (root), silently defeating --user below and leaving every build artifact root-owned. sudo
-# exports SUDO_UID/SUDO_GID for exactly this case; fall back to id for a plain invocation.
+# The container writes through a bind mount, so match its UID/GID to the invoking shell. When
+# the Docker daemon needs elevation, SUDO_UID/SUDO_GID preserve the actual user's ownership.
 BUILD_UID="${SUDO_UID:-$(id -u)}"
 BUILD_GID="${SUDO_GID:-$(id -g)}"
-echo "Running: sudo docker compose run --rm --build -T --user \"$BUILD_UID:$BUILD_GID\" dsi_wifi_manager sh -c \"$CMD\" (log: $BUILD_LOG)"
+echo "Running: ${DOCKER[*]} compose run --rm --build -T --user \"$BUILD_UID:$BUILD_GID\" dsi_wifi_manager sh -c \"$CMD\" (log: $BUILD_LOG)"
 echo ""
 # Remove any stale log before tee opens a fresh one. This belongs here and not in the
 # Makefile's clean target: that target runs *inside* the piped command below, after tee has
@@ -55,4 +69,4 @@ rm -f "$BUILD_LOG"
 #
 # Observed exactly that -- build.log's mtime landed two seconds before arm9.elf's, so tee had
 # already closed while make was still going.
-sudo docker compose run --rm --build -T --user "$BUILD_UID:$BUILD_GID" dsi_wifi_manager sh -c "$CMD" 2>&1 | tee "$BUILD_LOG"
+"${DOCKER[@]}" compose run --rm --build -T --user "$BUILD_UID:$BUILD_GID" dsi_wifi_manager sh -c "$CMD" 2>&1 | tee "$BUILD_LOG"

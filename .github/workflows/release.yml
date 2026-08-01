@@ -95,11 +95,13 @@ jobs:
           print("banner:", lines)
           print("unitcode: 0x%02X" % d[0x12])
           bad = []
-          # The version line is the tag alone. Equality rather than a prefix is the point: it
-          # also catches a build kind leaking back in, since "Release v1.2.3" would slip past
-          # any test that only asked whether the tag was present.
-          if lines[-1] != tag:
-              bad.append(f"version line is {lines[-1]!r}, expected the tag {tag!r}")
+          # Match top_banner(): it keeps a version that fits beside the app name and marks an
+          # overlong tag with '~'. This still rejects a leaked build kind while allowing the
+          # deliberate, visible truncation required by the 51-column screen.
+          room = 51 - len("DSi Wi-Fi Manager") - 1
+          expected = tag if len(tag) <= room else tag[:room - 1] + "~"
+          if lines[-1] != expected:
+              bad.append(f"version line is {lines[-1]!r}, expected {expected!r}")
           if d[0x12] != 0x02:
               bad.append("unitcode is not 0x02, DSi-only")
           if bad:
