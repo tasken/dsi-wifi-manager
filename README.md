@@ -44,23 +44,26 @@ python3 tools/crosscheck.py <flash images...>
 
 ## Credits
 
-*   Developed by `Tasken`
-*   Prior art and references:
-    *   [fwTool](https://github.com/ahezard/nintendo-ds-tools) by `ahezard`, which reads these settings. Its `Restore Wifi Settings` was never implemented, which is why this exists.
-    *   [WifiManager](https://github.com/Zakary2841/WifiManager) by `Zakary2841`, the 3DS equivalent and the inspiration. Different platform, different storage; a reference, not a port.
-    *   [dsibiosdumper](https://github.com/Arisotura/dsibiosdumper) by `Arisotura`, for making the firmware dumps this was built against.
-    *   [GBATEK](https://problemkaputt.de/gbatek-ds-firmware-wifi-internet-access-points.htm) by `Martin Korth`, for the record layout.
-*   Borrowed code:
-    *   [SafeNANDManager](https://github.com/DS-Homebrew/SafeNANDManager) by `zoogie`, for the DSi-mode gate and the Docker build skeleton
-    *   [BlocksDS](https://github.com/blocksds/sdk) by `Antonio Niño Díaz`, for the SDK and the Makefile templates
-    *   [Spleen](https://github.com/fcambus/spleen) by `Frederic Cambus`, for the 5x8 font
+Developed by [Augusto Daniele](https://github.com/tasken).
 
-The key combo confirmation before writing is styled after `d0k3`'s [GodMode9](https://github.com/d0k3/GodMode9) unlock sequence prompt, by way of [Cart-Flasher](https://github.com/tasken/Cart-Flasher).
+### Code and assets
+
+- [SafeNANDManager](https://github.com/DS-Homebrew/SafeNANDManager) supplies the DSi-mode check and original build skeleton. It is DS-Homebrew's fork of [zoogie's dumpTool](https://github.com/zoogie/dumpTool).
+- [BlocksDS](https://github.com/blocksds/sdk), by Antonio Niño Díaz, provides the SDK and Makefile templates.
+- [Spleen](https://github.com/fcambus/spleen), by Frederic Cambus, provides the 5x8 font.
+
+### Research and inspiration
+
+- [fwTool](https://github.com/ahezard/nintendo-ds-tools), by ahezard, and [GBATEK](https://problemkaputt.de/gbatek-ds-firmware-wifi-internet-access-points.htm), by Martin Korth, informed the firmware layout.
+- [dsibiosdumper](https://github.com/Arisotura/dsibiosdumper), by Arisotura, created the firmware dumps used for validation.
+- [WifiManager](https://github.com/Zakary2841/WifiManager), Zakary2841's fork of [LiquidFenrir's original](https://github.com/LiquidFenrir/WifiManager), is the 3DS design reference. This is not a port.
+- [GodMode9](https://github.com/d0k3/GodMode9), by d0k3, inspired the key-combo confirmation style.
 
 ## License
 
 GPL-3.0 - see [LICENSE](LICENSE). Copyright © 2026 Augusto Daniele.
 
-Four files keep their own licence and say so in their SPDX tag. [`licenses/README.md`](licenses/README.md) lists which, and reproduces every notice those licences require.
+Some files keep their own licence and SPDX tag. [`licenses/README.md`](licenses/README.md) lists
+them and reproduces the required notices.
 
 Nintendo, Nintendo DS and Nintendo DSi are trademarks of Nintendo. This project is not affiliated with, endorsed by, or connected to Nintendo in any way, and contains no Nintendo code or data.
