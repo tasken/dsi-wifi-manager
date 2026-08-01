@@ -288,7 +288,7 @@ static void detail_cell(detail_cell_t out, const char *label, const char *value)
 
 // `right` may be NULL for a row that only uses the left column, and `left` may be blank for
 // one that only uses the right.
-static void detail_row(const char *left, const char *right)
+static void detail_row_on(view_pane_t pane, const char *left, const char *right)
 {
     view_line_t line;
 
@@ -298,7 +298,17 @@ static void detail_row(const char *left, const char *right)
         snprintf(line, sizeof(line), "%-*.*s%.*s",
                  DETAIL_COL2, DETAIL_CELL - 1, left, DETAIL_CELL - 1, right);
 
-    put(line);
+    emit(pane, VIEW_PLAIN, line);
+}
+
+static void detail_row(const char *left, const char *right)
+{
+    detail_row_on(VIEW_BOTTOM, left, right);
+}
+
+static void top_detail_row(const char *left, const char *right)
+{
+    detail_row_on(VIEW_TOP, left, right);
 }
 
 // A dotted quad, or what its being zero means. Which question to ask is the caller's,
@@ -310,6 +320,33 @@ static void addr_text(const uint8_t a[4], const char *if_zero, char *buf, size_t
         snprintf(buf, len, "%s", if_zero);
     else
         snprintf(buf, len, "%u.%u.%u.%u", a[0], a[1], a[2], a[3]);
+}
+
+static void top_connection_details(const wifi_slot_t *s)
+{
+    detail_cell_t l[2];
+    detail_cell_t r[3];
+    char v[40];
+
+    addr_text(s->ip, "automatic (DHCP)", v, sizeof(v));
+    detail_cell(l[0], "Address", v);
+    addr_text(s->gateway, "automatic", v, sizeof(v));
+    detail_cell(r[0], "Gateway", v);
+
+    addr_text(s->dns1, "not set", v, sizeof(v));
+    detail_cell(l[1], "DNS 1", v);
+    addr_text(s->dns2, "not set", v, sizeof(v));
+    detail_cell(r[1], "DNS 2", v);
+
+    snprintf(v, sizeof(v), "/%u", s->subnet_prefix);
+    detail_cell_t subnet;
+    detail_cell(subnet, "Subnet", v);
+    snprintf(v, sizeof(v), "%u", s->mtu);
+    detail_cell(r[2], "MTU", v);
+
+    top_detail_row(l[0], r[0]);
+    top_detail_row(l[1], r[1]);
+    top_detail_row(subnet, r[2]);
 }
 
 
@@ -449,8 +486,9 @@ void view_idle_context(const wifi_layout_t *layout)
     rule(VIEW_TOP);
 }
 
-// "1  \"name\"" on one row, for the context panes, where the label eats 6 columns.
-#define CTX_LABEL 6
+// "connection 1  \"name\"" on one row, for the context panes. "connection" is the
+// widest label, so keep its number separated rather than letting the label run into it.
+#define CTX_LABEL 11
 
 static void top_slot_line(const char *label, const wifi_slot_t *s)
 {
@@ -471,16 +509,16 @@ static void top_slot_line(const char *label, const wifi_slot_t *s)
     top(line);
 }
 
-// The record's security and checksums as a continuation of the line above, indented to
-// the label column. The detail pane spells these out as their own labelled fields; here
-// they belong to the "rec" line and should read that way.
+// Security and checksums are a distinct field in the restore context. The label is also
+// useful in backup context, where the preceding line identifies the connection rather
+// than calling it a record.
 static void top_record_line(const wifi_slot_t *s)
 {
     view_line_t line;
     char crc[16];
 
     crc_text(s, crc, sizeof(crc));
-    snprintf(line, sizeof(line), "%*s%-10s [%02X] %s", CTX_LABEL, "",
+    snprintf(line, sizeof(line), "%-*s%-10s [%02X] %s", CTX_LABEL, "security",
              wifi_security_label(s), wifi_slot_security_byte(s), crc);
     top(line);
 }
@@ -511,14 +549,13 @@ void view_backup_context(const wifi_slot_t *slot, const char *dir, const char *f
 
     top("");
     if (dir != NULL)
-        top_text_line("to", dir);
+        top_text_line("folder", dir);
     if (filename != NULL)
         top_text_line("file", filename);
-
     top("");
     rule(VIEW_TOP);
-    top_a(VIEW_BAD, "The backup stores your Wi-Fi password");
-    top_a(VIEW_BAD, "unprotected on the SD card.");
+    top_a(VIEW_BAD, "This backup may contain Wi-Fi passwords");
+    top_a(VIEW_BAD, "in plain text. Protect the SD card.");
 }
 
 void view_restore_context(const view_restore_ctx_t *ctx)
@@ -526,19 +563,28 @@ void view_restore_context(const view_restore_ctx_t *ctx)
     top_banner();
     rule(VIEW_TOP);
     top("RESTORE");
-    top("");
 
-    // Nothing is invented: a field the user has not reached yet simply is not drawn, so
-    // the pane never shows a destination before one has been chosen.
-    if (ctx->file != NULL)
-        top_text_line("file", ctx->file);
-    if (ctx->dir != NULL)
-        top_text_line("from", ctx->dir);
-
-    if (ctx->source != NULL)
+    const wifi_slot_t *shown = (ctx->source != NULL) ? ctx->source : ctx->preview;
+    if (ctx->file != NULL || ctx->dir != NULL || shown != NULL)
     {
-        top_slot_line("rec", ctx->source);
-        top_record_line(ctx->source);
+        top("");
+        if (ctx->file != NULL)
+            top_text_line("file", ctx->file);
+        if (ctx->dir != NULL)
+            top_text_line("folder", ctx->dir);
+
+        if (shown != NULL)
+        {
+            top("");
+            top_slot_line((ctx->source != NULL) ? "record" : "preview", shown);
+            top_record_line(shown);
+            top(family_fits(shown->family));
+            if (!shown->is_free)
+            {
+                top("");
+                top_connection_details(shown);
+            }
+        }
     }
 
     if (ctx->dest != NULL)
@@ -549,10 +595,12 @@ void view_restore_context(const view_restore_ctx_t *ctx)
 
     if (ctx->undo != NULL)
     {
+        top("");
         top_text_line("copy", ctx->undo);
     }
     else if (ctx->undo_settled)
     {
+        top("");
         // Three different reasons for "no copy", and which one it is changes whether the
         // user should be worried. The confirm screen says the same thing; this pane keeps
         // saying it while they read the rest.
@@ -568,9 +616,13 @@ void view_restore_context(const view_restore_ctx_t *ctx)
     rule(VIEW_TOP);
 
     if (ctx->noop_known && ctx->noop)
+    {
         top_a(VIEW_DIM, "Nothing will be programmed.");
+    }
     else if (ctx->dest != NULL)
+    {
         top_a(VIEW_BAD, "Changes your console's settings.");
+    }
 }
 
 // --- the bottom pane ---------------------------------------------------------------
@@ -675,13 +727,16 @@ void view_confirm(const wifi_slot_t *slot, const char *dir, const char *filename
     put(line);
 
     put("");
-    put_a(VIEW_BAD, "The backup stores your Wi-Fi password unprotected");
-    put_a(VIEW_BAD, "on the SD card. Anyone with the card can read it.");
+    snprintf(line, sizeof(line), "Folder: %s", dir);
+    put_a(VIEW_DIM, line);
+    snprintf(line, sizeof(line), "File:   %s", filename);
+    put_a(VIEW_DIM, line);
+
     put("");
-    put(dir);
-    put(filename);
+    put_a(VIEW_BAD, "This backup may contain Wi-Fi passwords");
+    put_a(VIEW_BAD, "in plain text. Protect the SD card.");
     put("");
-    put_keys("<A> Write   <B> Cancel");
+    put_keys("<A> Save backup   <B> Back");
 }
 
 void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
@@ -694,8 +749,10 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
 
     if (ok)
     {
-        put(dir);
-        put(filename);
+        snprintf(line, sizeof(line), "Folder: %s", dir);
+        put_a(VIEW_DIM, line);
+        snprintf(line, sizeof(line), "File:   %s", filename);
+        put_a(VIEW_DIM, line);
         // Byte count without the word "record": a user has one backup, not one record in a
         // file. The count only matters when there is more than one, which the app itself
         // never writes.
@@ -714,7 +771,7 @@ void view_result(bool ok, const char *dir, const char *filename, uint32_t bytes,
     }
 
     put("");
-    put_keys(ok ? "<A> Continue" : "<B> Back");
+    put_keys("<A> Continue");
 }
 
 // --- restore ---------------------------------------------------------------------
@@ -803,8 +860,8 @@ void view_pick_file(const backup_entry_t *entries, uint8_t count, uint8_t cursor
     view_line_t line;
     uint8_t fitting = view_entry_count_fitting(entries, count, dest);
 
-    snprintf(line, sizeof(line), "Restore into Connection %u: pick a backup (%u)",
-             dest->number, fitting);
+    snprintf(line, sizeof(line), "Restore into Connection %u: %u compatible backup%s",
+             dest->number, fitting, (fitting == 1) ? "" : "s");
     put(line);
     put("");
 
@@ -924,8 +981,9 @@ void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor)
     view_line_t line;
     view_desc_t what;
 
-    snprintf(line, sizeof(line), "Connection %u already has settings:", dest->number);
+    snprintf(line, sizeof(line), "Restore into Connection %u", dest->number);
     put(line);
+    put("");
 
     describe(dest, VIEW_COLS - 2, what, sizeof(what));
     snprintf(line, sizeof(line), "  %s", what);
@@ -944,7 +1002,7 @@ void view_undo_prompt(const wifi_slot_t *dest, uint8_t cursor)
     }
 
     put("");
-    put_keys("<A> Select   <B> Cancel");
+    put_keys("<A> Select   <B> Back");
 }
 
 // Directions as the renderer's arrow glyphs, which are real triangles rather than the
@@ -1052,7 +1110,7 @@ void view_restore_confirm(const wifi_slot_t *source, const wifi_slot_t *dest,
     put_a(VIEW_ACCENT, caret);
 
     put("");
-    put_keys("<B> Cancel");
+    put_keys("<B> Back");
 }
 
 // Shown when a press was not the next symbol. Nothing has been written at this point -- the
@@ -1065,7 +1123,7 @@ void view_combo_wrong(void)
     put("");
     put("The sequence starts over.");
     put("");
-    put_keys("<A> Retry   <B> Cancel");
+    put_keys("<A> Retry   <B> Back");
 }
 
 void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
@@ -1113,7 +1171,7 @@ void view_restore_result(bool ok, uint8_t dest_number, const wifi_slot_t *now,
     }
 
     put("");
-    put_keys(ok ? "<A> Continue" : "<B> Back");
+    put_keys("<A> Continue");
 }
 
 
@@ -1140,7 +1198,7 @@ static const char *action_words(conn_action_t a)
                                      : "Restore a backup into this connection";
 }
 
-void view_conn_screen(const wifi_slot_t *s, uint8_t cursor)
+void view_conn_screen(const wifi_slot_t *s, uint8_t cursor, bool debug)
 {
     view_line_t line;
 
@@ -1159,11 +1217,10 @@ void view_conn_screen(const wifi_slot_t *s, uint8_t cursor)
         ssid_text(s, VIEW_COLS - 16, ssid, sizeof(ssid));
         snprintf(line, sizeof(line), "Connection %u   \"%s\"", s->number, ssid);
         put(line);
-
     }
 
     put("");
-    view_conn_detail(s);
+    view_conn_detail(s, debug);
     put("");
 
     uint8_t n = view_conn_action_count(s);
@@ -1212,16 +1269,19 @@ void view_noop_notice(const wifi_slot_t *dest, bool allow_force)
 // This is what the top pane used to carry. It moved because the top screen sits further
 // from the eye, cannot scroll and cannot be touched, and because P1 Tier B will add the
 // secrets block and push this past 24 rows.
-void view_conn_detail(const wifi_slot_t *s)
+void view_conn_detail(const wifi_slot_t *s, bool debug)
 {
     view_line_t line;
     char crc[16];
 
-    // The raw offset and length: the one pair of facts that ties a slot on screen to a
-    // range in a flash dump, which is how every hardware finding here was checked.
-    snprintf(line, sizeof(line), "0x%05lX  %u bytes    status 0x%02X    config 0x%02X",
-             (unsigned long)s->offset, s->length, s->status, s->config_bits);
-    put_a(VIEW_DIM, line);
+    if (debug)
+    {
+        // The raw offset and status fields tie a slot on screen to a flash dump, but they
+        // are diagnostics rather than connection information for a normal user.
+        snprintf(line, sizeof(line), "0x%05lX  %u bytes    status 0x%02X    config 0x%02X",
+                 (unsigned long)s->offset, s->length, s->status, s->config_bits);
+        put_a(VIEW_DEBUG, line);
+    }
 
     crc_text(s, crc, sizeof(crc));
 
@@ -1244,16 +1304,16 @@ void view_conn_detail(const wifi_slot_t *s)
     put("");
 
     detail_cell_t l[2];
-    detail_cell_t r[4];
+    detail_cell_t r[3];
     char v[40];
 
     addr_text(s->ip, "automatic (DHCP)", v, sizeof(v));
     detail_cell(l[0], "Address", v);
     addr_text(s->gateway, "automatic", v, sizeof(v));
-    detail_cell(l[1], "Gateway", v);
+    detail_cell(r[0], "Gateway", v);
 
     addr_text(s->dns1, "not set", v, sizeof(v));
-    detail_cell(r[0], "DNS 1", v);
+    detail_cell(l[1], "DNS 1", v);
     addr_text(s->dns2, "not set", v, sizeof(v));
     detail_cell(r[1], "DNS 2", v);
 
@@ -1261,12 +1321,14 @@ void view_conn_detail(const wifi_slot_t *s)
     // the reference DSi, and MTU 0 is the value System Settings later rewrites to 1400, so
     // dressing either up as invalid would contradict a hardware finding.
     snprintf(v, sizeof(v), "/%u", s->subnet_prefix);
-    detail_cell(r[2], "Subnet", v);
+    detail_cell_t subnet;
+    detail_cell(subnet, "Subnet", v);
     snprintf(v, sizeof(v), "%u", s->mtu);
-    detail_cell(r[3], "MTU", v);
+    detail_cell(r[2], "MTU", v);
 
-    for (int i = 0; i < 4; i++)
-        detail_row((i < 2) ? l[i] : "", r[i]);
+    detail_row(l[0], r[0]);
+    detail_row(l[1], r[1]);
+    detail_row(subnet, r[2]);
 }
 
 // The layout the header used to occupy on every screen. Constant for the session, so it is
@@ -1335,7 +1397,6 @@ void view_delete_confirm(const backup_entry_t *entry, uint8_t cursor)
     snprintf(line, sizeof(line), "  from %s", entry->dir);
     put_a(VIEW_DIM, line);
     put("");
-
     // Say what is not affected as well as what is. The file and the connection have similar
     // names on screen, and someone reaching for "delete" wants to be sure which one goes.
     put_a(VIEW_BAD, "This cannot be undone.");
@@ -1351,7 +1412,7 @@ void view_delete_confirm(const backup_entry_t *entry, uint8_t cursor)
     }
 
     put("");
-    put_keys("<A> Select   <B> Cancel");
+    put_keys("<A> Select   <B> Back");
 }
 
 void view_delete_result(bool ok, const char *name, const char *detail)

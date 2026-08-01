@@ -332,6 +332,40 @@ def check_rejects(path):
             print(f"  FAIL {name} accepted by {' and '.join(who)}")
             failed += 1
 
+    _, _, layout = slot_offsets(open(path, "rb").read())
+    if len(layout) == 6:
+        # BACKUP_MAX_LEN is a valid six-record file, so it is the only size where a bounded
+        # fread() can hide an appended byte. The ARM9 read helper probes one byte past its
+        # buffer; this parser check proves the full prefix itself still treats that byte as
+        # trailing junk rather than a tolerated extension.
+        max_path = os.path.join(SCRATCH, "maximum.dswifi")
+        subprocess.run([BIN, "--backup", path, max_path, "1", "2", "3", "4", "5", "6"],
+                       check=True, capture_output=True)
+        maximum = open(max_path, "rb").read()
+        bad_path = os.path.join(SCRATCH, "bad.dswifi")
+        with open(bad_path, "wb") as f:
+            f.write(maximum + b"\x00")
+
+        py_rejected = True
+        try:
+            decode_backup.parse(maximum + b"\x00")
+            py_rejected = False
+        except decode_backup.BadBackup:
+            pass
+        c_rejected = subprocess.run([BIN, "--verify", bad_path],
+                                    capture_output=True).returncode != 0
+
+        if py_rejected and c_rejected:
+            print("  both refuse: maximum-size prefix plus trailing byte")
+        else:
+            who = []
+            if not c_rejected:
+                who.append("backup_parse (C)")
+            if not py_rejected:
+                who.append("decode_backup.py")
+            print(f"  FAIL maximum-size prefix accepted by {' and '.join(who)}")
+            failed += 1
+
     if failed:
         print("FAIL: a malformed backup was accepted")
         return 1

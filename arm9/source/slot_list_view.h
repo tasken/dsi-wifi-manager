@@ -88,8 +88,9 @@ void view_set_sink(view_sink_t sink);
 void view_summary(const wifi_layout_t *layout, const wifi_slot_t *slot, uint8_t of);
 
 // The full decode, on the bottom screen, under the slot's own heading and above its actions.
-// Reached by pressing A on a slot, which is a deliberate act of looking closely.
-void view_conn_detail(const wifi_slot_t *slot);
+// Reached by pressing A on a slot, which is a deliberate act of looking closely. Dev builds
+// also show raw flash diagnostics that are not useful in the normal user flow.
+void view_conn_detail(const wifi_slot_t *slot, bool debug);
 
 // Held on screen for every step of a backup, so the confirm screen is not the only place
 // that says which slot and which file.
@@ -102,6 +103,7 @@ typedef struct {
     const char        *file;        // backup file name
     const char        *dir;         // folder it came from
     const wifi_slot_t *source;      // the record to write
+    const wifi_slot_t *preview;     // record under the restore picker cursor
     const wifi_slot_t *dest;        // the slot it goes into
 
     // `undo` is the name of the safety copy. NULL means no copy, which is three different
@@ -154,7 +156,7 @@ typedef enum {
 uint8_t view_conn_action_count(const wifi_slot_t *slot);
 conn_action_t view_conn_action_at(const wifi_slot_t *slot, uint8_t index);
 
-void view_conn_screen(const wifi_slot_t *slot, uint8_t cursor);
+void view_conn_screen(const wifi_slot_t *slot, uint8_t cursor, bool debug);
 
 // The console's flash layout, on request from the list. Constant for the session, so it is
 // not worth three rows of the glanceable pane on every cursor move.

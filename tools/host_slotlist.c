@@ -311,19 +311,19 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
 
     printf("\n--- slot screen, slot in use, cursor on Back up ---\n");
     ruler();
-    view_conn_screen(&slots[first_used], 0);
+    view_conn_screen(&slots[first_used], 0, DSIWIFI_DEBUG != 0);
     ruler();
 
     printf("\n--- slot screen, slot in use, cursor on Restore ---\n");
     ruler();
-    view_conn_screen(&slots[first_used], 1);
+    view_conn_screen(&slots[first_used], 1, DSIWIFI_DEBUG != 0);
     ruler();
 
     if (any_free)
     {
         printf("\n--- slot screen, free slot: restore is the only option ---\n");
         ruler();
-        view_conn_screen(&slots[first_free], 0);
+        view_conn_screen(&slots[first_free], 0, DSIWIFI_DEBUG != 0);
         ruler();
     }
 
@@ -499,7 +499,7 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
     printf("\n--- restore: failed ---\n");
     ruler();
     view_restore_result(false, slots[0].number, &slots[0], NULL,
-                        "writeFirmware refused the write");
+                        "The console refused the change.");
     ruler();
 
     // The top pane as the restore flow fills it in. Every stage, because a NULL field is
@@ -516,12 +516,14 @@ static void print_screens(const wifi_layout_t *layout, const wifi_slot_t *slots)
     ruler();
     rc.file = picked[0].name;
     rc.dir = picked[0].dir;
-    rc.source = source;
+    rc.preview = source;
     view_restore_context(&rc);
     ruler();
 
     printf("\n--- top pane: restore, destination picked ---\n");
     ruler();
+    rc.source = source;
+    rc.preview = NULL;
     rc.dest = &slots[0];
     rc.noop = true;
     rc.noop_known = true;

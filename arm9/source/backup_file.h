@@ -66,6 +66,10 @@ typedef struct {
     uint8_t     count;                      // records, 0 if unreadable
     wifi_slot_t rec[WIFI_MAX_SLOTS];        // offset is meaningless here; number is the
                                             // slot the record was taken from
+    // The picker describes these bytes before restore reopens the file. Keeping the exact
+    // records lets the write gate reject a file changed after that preview, rather than
+    // writing another valid record from the same path.
+    uint8_t     data[WIFI_MAX_SLOTS][WIFI_TWL_LEN];
     bool        ok;
     const char  *problem;                   // why not, for the picker to show
 } backup_entry_t;
