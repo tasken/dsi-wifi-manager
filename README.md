@@ -4,7 +4,7 @@
 
 # DSi Wi-Fi Manager
 
-Back up and restore the six Wi-Fi connections stored in a Nintendo DSi's firmware.
+Back up and restore the Wi-Fi connections stored in a Nintendo DSi's firmware.
 
 ## Getting started
 
