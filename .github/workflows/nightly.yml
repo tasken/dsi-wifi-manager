@@ -82,9 +82,10 @@ jobs:
           fi
           echo "no warnings"
       - name: Publish build to GH Actions
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           # The commit stays in the filename so a downloaded nightly identifies itself.
           path: dsi_wifi_manager-*.dsi
-          name: dsi_wifi_manager-nightly
+          name: dsi_wifi_manager-nightly-${{ github.sha }}
           if-no-files-found: error
+          retention-days: 14
