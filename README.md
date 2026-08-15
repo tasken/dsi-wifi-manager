@@ -8,7 +8,7 @@ Back up and restore the Wi-Fi connections stored in a Nintendo DSi's firmware.
 
 ## Getting started
 
-Download [`dsi_wifi_manager.dsi`](https://github.com/tasken/DSi-WiFi-Manager/releases/latest/download/dsi_wifi_manager.dsi) and place it on your SD card. You need a DSi that can run DSi-mode homebrew.
+Download [`dsi_wifi_manager.dsi`](https://github.com/tasken/dsi-wifi-manager/releases/latest/download/dsi_wifi_manager.dsi) and place it on your SD card. You need a DSi that can run DSi-mode homebrew.
 
 1. Launch DSi Wi-Fi Manager from your homebrew launcher.
 1. Pick a connection from the list and press `A` to open it.

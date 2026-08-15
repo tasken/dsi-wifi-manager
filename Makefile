@@ -63,7 +63,7 @@ export DSIWIFI_DEBUG
 # strip it from the branches -- the banner would gain a leading space nothing else explains.
 DSIWIFI_VERSION	:= $(if $(filter Release,$(DSIWIFI_BUILD_KIND)),$(DSIWIFI_COMMIT),$(DSIWIFI_BUILD_KIND) $(DSIWIFI_COMMIT))
 
-GAME_SUBTITLE2	:= $(DSIWIFI_VERSION)
+GAME_SUBTITLE2	:= Nimbo
 
 export DSIWIFI_VERSION
 
