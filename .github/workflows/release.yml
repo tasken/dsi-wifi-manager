@@ -34,7 +34,11 @@ jobs:
           # No pipefail: the container's shell is dash, which does not have it, and `make | tee`
           # would then report tee's status and a broken build would look clean. Redirecting and
           # replaying the log keeps make's own exit status without needing bash.
-          make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="${{ github.event.release.tag_name || github.sha }}" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
+          release_ref="${{ github.event.release.tag_name }}"
+          if [ -z "$release_ref" ]; then
+            release_ref="$(git rev-parse --short=7 HEAD)"
+          fi
+          make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="$release_ref" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
           cat build.log
       - name: Check the debug affordances are off
         # A Release that still offered the forced write would put a developer affordance in front
@@ -84,7 +88,8 @@ jobs:
         # layer takes a runtime flag so the offline harness can draw both variants, so the
         # text compiles in either way and only its reachability changes.
         env:
-          TAG: ${{ github.event.release.tag_name || github.sha }}
+          TAG: ${{ github.event.release.tag_name }}
+          COMMIT: ${{ github.sha }}
         run: |
           python3 - <<'EOF'
           import os, struct, sys
@@ -92,7 +97,7 @@ jobs:
           off = struct.unpack("<I", d[0x68:0x6C])[0]
           banner = d[off+0x240:off+0x240+256].decode("utf-16-le", "replace").split("\x00")[0]
           lines = banner.split("\n")
-          tag = os.environ["TAG"]
+          tag = os.environ["TAG"] or os.environ["COMMIT"][:7]
           print("banner:", lines)
           print("unitcode: 0x%02X" % d[0x12])
           bad = []
@@ -112,7 +117,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api user --jq .login
+        run: gh api "repos/${{ github.repository }}" --jq .full_name
       - name: Upload dsi_wifi_manager.dsi
         if: github.event_name == 'release'
         env:
