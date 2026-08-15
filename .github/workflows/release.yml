@@ -3,6 +3,7 @@ name: Build DSi Wi-Fi Manager release
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -33,7 +34,7 @@ jobs:
           # No pipefail: the container's shell is dash, which does not have it, and `make | tee`
           # would then report tee's status and a broken build would look clean. Redirecting and
           # replaying the log keeps make's own exit status without needing bash.
-          make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="${{ github.event.release.tag_name }}" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
+          make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="${{ github.event.release.tag_name || github.sha }}" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
           cat build.log
       - name: Check the debug affordances are off
         # A Release that still offered the forced write would put a developer affordance in front
@@ -83,7 +84,7 @@ jobs:
         # layer takes a runtime flag so the offline harness can draw both variants, so the
         # text compiles in either way and only its reachability changes.
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || github.sha }}
         run: |
           python3 - <<'EOF'
           import os, struct, sys
@@ -107,7 +108,13 @@ jobs:
           if bad:
               print("::error::" + "; ".join(bad)); sys.exit(1)
           EOF
+      - name: Verify GitHub CLI authentication
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api user --jq .login
       - name: Upload dsi_wifi_manager.dsi
-        uses: softprops/action-gh-release@v3.0.2
-        with:
-          files: dsi_wifi_manager.dsi
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dsi_wifi_manager.dsi --clobber
