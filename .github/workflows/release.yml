@@ -36,7 +36,7 @@ jobs:
           # replaying the log keeps make's own exit status without needing bash.
           release_ref="${{ github.event.release.tag_name }}"
           if [ -z "$release_ref" ]; then
-            release_ref="$(git rev-parse --short=7 HEAD)"
+            release_ref="$(printf '%.7s' "${{ github.sha }}")"
           fi
           make ROM=dsi_wifi_manager.dsi DSIWIFI_BUILD_KIND=Release DSIWIFI_COMMIT="$release_ref" > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
           cat build.log
