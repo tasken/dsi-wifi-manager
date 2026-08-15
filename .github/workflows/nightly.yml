@@ -16,7 +16,7 @@ jobs:
     name: Offline test suite
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
       - name: Build the fixture and run the suite
         # The real dumps are not in the repository, so CI runs against the synthetic flash
         # only. That still covers the decoder, the backup round trip, every malformed-file
@@ -30,7 +30,7 @@ jobs:
     name: Build through documented wrapper
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
       - name: Build with build.sh
         run: ./build.sh build
       - name: Fail on any compiler warning
@@ -50,7 +50,7 @@ jobs:
     name: Build with BlocksDS toolchain using official Docker image
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
       - name: Build app
         id: build
         # The Makefile builds the output name from the kind and the commit, so that is all this

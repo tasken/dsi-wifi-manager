@@ -16,7 +16,7 @@ jobs:
     name: Build with BlocksDS toolchain using official Docker image
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
       - name: Build app
         id: build
         # ROM is overridden to the bare name so every release carries an identically-named
@@ -53,7 +53,7 @@ jobs:
           fi
           echo "no warnings"
       - name: Keep the ROM for the verify job
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-rom
           path: dsi_wifi_manager.dsi
@@ -72,7 +72,7 @@ jobs:
     name: Verify the ROM and attach it to the release
     steps:
       - name: Fetch the ROM
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           name: release-rom
       - name: Check the ROM really is a Release DSi build
@@ -108,7 +108,6 @@ jobs:
               print("::error::" + "; ".join(bad)); sys.exit(1)
           EOF
       - name: Upload dsi_wifi_manager.dsi
-        uses: AButler/upload-release-assets@v4.0.0
+        uses: softprops/action-gh-release@v3.0.2
         with:
           files: dsi_wifi_manager.dsi
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
