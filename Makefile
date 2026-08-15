@@ -146,3 +146,12 @@ $(ROM): arm9 arm7
 		-7 build/arm7.elf -9 build/arm9.elf \
 		-b $(GAME_ICON) "$(GAME_FULL_TITLE)" \
 		$(NDSTOOL_ARGS)
+	@branch=$$(git symbolic-ref --short -q HEAD || echo detached); \
+	printf '%s\n' \
+		'=== Build summary ===' \
+		'  ROM     $(ROM)' \
+		'  BANNER  $(GAME_TITLE)' \
+		'          $(GAME_SUBTITLE1)' \
+		'          $(GAME_SUBTITLE2)' \
+		'  BUILD   kind=$(DSIWIFI_BUILD_KIND)'; \
+	printf '  SOURCE  commit=$(DSIWIFI_COMMIT) branch=%s\n' "$$branch"
