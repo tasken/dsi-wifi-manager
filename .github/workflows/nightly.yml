@@ -62,6 +62,7 @@ jobs:
           # replaying the log keeps make's own exit status without needing bash.
           make DSIWIFI_BUILD_KIND=Nightly DSIWIFI_COMMIT=$(echo "${{ github.sha }}" | cut -c1-7) > build.log 2>&1 || { cat build.log; echo "::error::build failed"; exit 1; }
           cat build.log
+          printf 'short_sha=%.7s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Check this really is a debug build
         # Nightlies are for testing, so the flash-layout screen and the forced no-op write must
         # be present. Read back out of build.log rather than assumed from the build kind: the
@@ -86,6 +87,6 @@ jobs:
         with:
           # The commit stays in the filename so a downloaded nightly identifies itself.
           path: dsi_wifi_manager-*.dsi
-          name: dsi_wifi_manager-nightly-${{ github.sha }}
+          name: dsi_wifi_manager-nightly-${{ steps.build.outputs.short_sha }}
           if-no-files-found: error
           retention-days: 14
