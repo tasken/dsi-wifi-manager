@@ -44,7 +44,7 @@ python3 tools/crosscheck.py <flash images...>
 
 ## Credits
 
-Developed by [Augusto Daniele](https://github.com/tasken).
+Developed by [Tasken](https://github.com/tasken).
 
 ### Code and assets
 
@@ -61,7 +61,7 @@ Developed by [Augusto Daniele](https://github.com/tasken).
 
 ## License
 
-GPL-3.0 - see [LICENSE](LICENSE). Copyright © 2026 Augusto Daniele.
+GPL-3.0 - see [LICENSE](LICENSE). Copyright © 2026 Tasken.
 
 Some files keep their own licence and SPDX tag. [`licenses/README.md`](licenses/README.md) lists
 them and reproduces the required notices.
